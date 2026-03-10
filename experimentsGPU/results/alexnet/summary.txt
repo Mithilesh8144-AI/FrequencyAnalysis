@@ -1,0 +1,12 @@
+AlexNet - Experiment 3 Summary
+============================================================
+
+model: AlexNet
+experiment: Experiment 3 - 2D Learnable Frequency Mask
+dataset_size: 25000
+baseline_accuracy: 52.476
+final_accuracy: 47.476
+improvement: -5.0
+epochs: 20
+learning_rate: 0.01
+mask_parameters: 50176

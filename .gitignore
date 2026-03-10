@@ -1,0 +1,10 @@
+# Large model checkpoints — too big for GitHub (>100MB)
+**/checkpoint.pt
+**/best_model.pt
+
+# Jupyter noise
+**/.ipynb_checkpoints/
+
+# Python cache
+__pycache__/
+*.pyc

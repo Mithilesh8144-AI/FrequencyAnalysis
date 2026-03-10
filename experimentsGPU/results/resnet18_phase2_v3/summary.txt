@@ -1,0 +1,19 @@
+ResNet-18 Phase 2 v3 - Joint Training with Normalized Mask
+=======================================================
+
+Architecture: ResNet-18 (random init)
+Train samples: 20,000
+Val samples: 5,000
+Epochs trained: 54
+Best Val Accuracy: 9.32%
+Final Train Accuracy: 93.55%
+Final Val Accuracy: 8.82%
+
+Key Change from v2:
+  Mask normalization: ENABLED (mean forced to 1.0)
+  Regularization: REMOVED (not needed with normalization)
+
+Hyperparameters:
+  Mask LR: 0.01
+  Classifier LR: 0.001
+  Data augmentation: Yes

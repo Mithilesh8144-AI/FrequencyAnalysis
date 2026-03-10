@@ -1,0 +1,12 @@
+ResNet-50 - Experiment 3 Summary
+============================================================
+
+model: ResNet-50
+experiment: Experiment 3 - 2D Learnable Frequency Mask
+dataset_size: 25000
+baseline_accuracy: 74.18
+final_accuracy: 74.564
+improvement: 0.38399999999998613
+epochs: 20
+learning_rate: 0.01
+mask_parameters: 50176
