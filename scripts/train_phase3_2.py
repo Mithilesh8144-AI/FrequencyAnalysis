@@ -36,7 +36,7 @@ from scripts.distributed import (
     wrap_model, unwrap_model, make_dataloader, is_main,
 )
 
-# --- Hyperparameters ---
+# --- Hyperparameters (defaults, CNN-tuned) ---
 WARMUP_EPOCHS = 10
 EPOCHS = 60
 MASK_LR_WARMUP = 0.005
@@ -54,6 +54,34 @@ ARCH_LOADERS = {
     'vgg16': lambda: tv_models.vgg16(weights=tv_models.VGG16_Weights.IMAGENET1K_V1),
     'vit_b_16': lambda: tv_models.vit_b_16(weights=tv_models.ViT_B_16_Weights.IMAGENET1K_V1),
 }
+
+# Per-architecture overrides (DeiT-style for ViT)
+ARCH_HPARAMS = {
+    'vit_b_16': {
+        'optimizer': 'adamw',
+        'weight_decay': 0.05,
+        'classifier_lr': 0.00002,
+    },
+}
+
+
+def get_hparams(arch):
+    """Return merged hyperparameters for the given architecture."""
+    defaults = {
+        'optimizer': 'adam',
+        'weight_decay': WEIGHT_DECAY,
+        'classifier_lr': CLASSIFIER_LR,
+        'mask_lr_warmup': MASK_LR_WARMUP,
+        'mask_lr_finetune': MASK_LR_FINETUNE,
+    }
+    overrides = ARCH_HPARAMS.get(arch, {})
+    return {**defaults, **overrides}
+
+
+def make_optimizer(param_groups, hp):
+    """Create Adam or AdamW based on arch hparams."""
+    cls = optim.AdamW if hp['optimizer'] == 'adamw' else optim.Adam
+    return cls(param_groups, weight_decay=hp['weight_decay'])
 
 
 class JointTrainingPipeline(nn.Module):
@@ -308,14 +336,17 @@ def main():
     raw_pipeline = unwrap_model(pipeline)
 
     # --- Baseline ---
+    hp = get_hparams(arch)
     # Linear LR scaling: effective batch = BATCH_SIZE * world_size
     lr_scale = world_size
-    mask_lr_warmup = MASK_LR_WARMUP * lr_scale
-    mask_lr_finetune = MASK_LR_FINETUNE * lr_scale
-    classifier_lr = CLASSIFIER_LR * lr_scale
-    if is_main(rank) and world_size > 1:
-        print(f"\n  LR scaling: x{world_size} (mask warmup: {MASK_LR_WARMUP}->{mask_lr_warmup}, "
-              f"mask finetune: {MASK_LR_FINETUNE}->{mask_lr_finetune}, classifier: {CLASSIFIER_LR}->{classifier_lr})")
+    mask_lr_warmup = hp['mask_lr_warmup'] * lr_scale
+    mask_lr_finetune = hp['mask_lr_finetune'] * lr_scale
+    classifier_lr = hp['classifier_lr'] * lr_scale
+    if is_main(rank):
+        print(f"\n  Optimizer: {hp['optimizer']} | Weight decay: {hp['weight_decay']}")
+        if world_size > 1:
+            print(f"  LR scaling: x{world_size} (mask warmup: {hp['mask_lr_warmup']}->{mask_lr_warmup}, "
+                  f"mask finetune: {hp['mask_lr_finetune']}->{mask_lr_finetune}, classifier: {hp['classifier_lr']}->{classifier_lr})")
 
     criterion = nn.CrossEntropyLoss()
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -351,16 +382,14 @@ def main():
 
         if in_finetune_stage:
             raw_pipeline.unfreeze_classifier()
-            optimizer = optim.Adam([
+            optimizer = make_optimizer([
                 {'params': raw_pipeline.get_mask_params(), 'lr': mask_lr_finetune},
                 {'params': raw_pipeline.get_classifier_params(), 'lr': classifier_lr},
-            ], weight_decay=WEIGHT_DECAY)
+            ], hp)
         else:
             raw_pipeline.freeze_classifier()
-            optimizer = optim.Adam(
-                raw_pipeline.get_mask_params(), lr=mask_lr_warmup,
-                weight_decay=WEIGHT_DECAY,
-            )
+            optimizer = make_optimizer(
+                [{'params': raw_pipeline.get_mask_params(), 'lr': mask_lr_warmup}], hp)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         if is_main(rank):
             print(f"Resumed from epoch {start_epoch}, best_val_acc={best_val_acc:.2f}%")
@@ -368,10 +397,8 @@ def main():
         raw_pipeline.freeze_classifier()
         if is_main(rank):
             print("  [Warmup] Classifier FROZEN")
-        optimizer = optim.Adam(
-            raw_pipeline.get_mask_params(), lr=mask_lr_warmup,
-            weight_decay=WEIGHT_DECAY,
-        )
+        optimizer = make_optimizer(
+            [{'params': raw_pipeline.get_mask_params(), 'lr': mask_lr_warmup}], hp)
         if is_main(rank):
             print("Starting fresh training")
             print(f"Baseline to beat: {baseline_acc1:.2f}%")
@@ -398,10 +425,10 @@ def main():
             raw_pipeline.unfreeze_classifier()
             in_finetune_stage = True
 
-            optimizer = optim.Adam([
+            optimizer = make_optimizer([
                 {'params': raw_pipeline.get_mask_params(), 'lr': mask_lr_finetune},
                 {'params': raw_pipeline.get_classifier_params(), 'lr': classifier_lr},
-            ], weight_decay=WEIGHT_DECAY)
+            ], hp)
 
             patience_counter = 0
 

@@ -46,7 +46,7 @@ from scripts.distributed import (
     wrap_model, unwrap_model, make_dataloader, is_main,
 )
 
-# --- Hyperparameters ---
+# --- Hyperparameters (defaults, CNN-tuned) ---
 EPOCHS = 120
 MASK_LR = 0.005
 CLASSIFIER_LR = 0.001
@@ -55,6 +55,7 @@ GRAD_CLIP_NORM = 1.0
 EARLY_STOP_PATIENCE = 20
 BATCH_SIZE = 64
 TRAIN_SPLIT = 0.8
+LR_WARMUP_EPOCHS = 0
 
 ARCH_LOADERS = {
     'resnet18': lambda: tv_models.resnet18(weights=None, num_classes=1000),
@@ -63,6 +64,35 @@ ARCH_LOADERS = {
     'vgg16': lambda: tv_models.vgg16(num_classes=1000),
     'vit_b_16': lambda: tv_models.vit_b_16(num_classes=1000),
 }
+
+# Per-architecture overrides (DeiT-style for ViT)
+ARCH_HPARAMS = {
+    'vit_b_16': {
+        'optimizer': 'adamw',
+        'weight_decay': 0.05,
+        'classifier_lr': 0.001,
+        'lr_warmup_epochs': 5,
+    },
+}
+
+
+def get_hparams(arch):
+    """Return merged hyperparameters for the given architecture."""
+    defaults = {
+        'optimizer': 'adam',
+        'weight_decay': WEIGHT_DECAY,
+        'classifier_lr': CLASSIFIER_LR,
+        'mask_lr': MASK_LR,
+        'lr_warmup_epochs': LR_WARMUP_EPOCHS,
+    }
+    overrides = ARCH_HPARAMS.get(arch, {})
+    return {**defaults, **overrides}
+
+
+def make_optimizer(param_groups, hp):
+    """Create Adam or AdamW based on arch hparams."""
+    cls = optim.AdamW if hp['optimizer'] == 'adamw' else optim.Adam
+    return cls(param_groups, weight_decay=hp['weight_decay'])
 
 
 class JointTrainingPipeline(nn.Module):
@@ -322,27 +352,39 @@ def main():
         print(f"  Mask activation: sigmoid (range 0-2)")
 
     # --- Training setup ---
+    hp = get_hparams(arch)
     # Linear LR scaling: effective batch = BATCH_SIZE * world_size
     lr_scale = world_size
-    mask_lr = MASK_LR * lr_scale
-    classifier_lr = CLASSIFIER_LR * lr_scale
-    if is_main(rank) and world_size > 1:
-        print(f"\n  LR scaling: x{world_size} (mask: {MASK_LR}->{mask_lr}, classifier: {CLASSIFIER_LR}->{classifier_lr})")
+    mask_lr = hp['mask_lr'] * lr_scale
+    classifier_lr = hp['classifier_lr'] * lr_scale
+    if is_main(rank):
+        print(f"\n  Optimizer: {hp['optimizer']} | Weight decay: {hp['weight_decay']}")
+        if hp['lr_warmup_epochs'] > 0:
+            print(f"  LR warmup: {hp['lr_warmup_epochs']} epochs")
+        if world_size > 1:
+            print(f"  LR scaling: x{world_size} (mask: {hp['mask_lr']}->{mask_lr}, classifier: {hp['classifier_lr']}->{classifier_lr})")
 
     criterion = nn.CrossEntropyLoss()
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     if args.skip_fft:
-        optimizer = optim.Adam(
-            raw_pipeline.get_classifier_params(), lr=classifier_lr,
-            weight_decay=WEIGHT_DECAY)
+        optimizer = make_optimizer(
+            [{'params': raw_pipeline.get_classifier_params(), 'lr': classifier_lr}], hp)
     else:
-        optimizer = optim.Adam([
+        optimizer = make_optimizer([
             {'params': raw_pipeline.get_mask_params(), 'lr': mask_lr},
             {'params': raw_pipeline.get_classifier_params(), 'lr': classifier_lr},
-        ], weight_decay=WEIGHT_DECAY)
+        ], hp)
 
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+    if hp['lr_warmup_epochs'] > 0:
+        warmup_scheduler = optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=0.01, total_iters=hp['lr_warmup_epochs'])
+        scheduler = optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[hp['lr_warmup_epochs']])
+    else:
+        scheduler = cosine_scheduler
 
     # --- Training state ---
     history = {
