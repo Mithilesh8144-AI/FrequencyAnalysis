@@ -61,6 +61,7 @@ ARCH_LOADERS = {
     'resnet50': lambda: tv_models.resnet50(weights=None, num_classes=1000),
     'alexnet': lambda: tv_models.alexnet(num_classes=1000),
     'vgg16': lambda: tv_models.vgg16(num_classes=1000),
+    'vit_b_16': lambda: tv_models.vit_b_16(num_classes=1000),
 }
 
 

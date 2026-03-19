@@ -52,6 +52,7 @@ ARCH_LOADERS = {
     'resnet50': lambda: tv_models.resnet50(weights=tv_models.ResNet50_Weights.IMAGENET1K_V1),
     'alexnet': lambda: tv_models.alexnet(weights=tv_models.AlexNet_Weights.IMAGENET1K_V1),
     'vgg16': lambda: tv_models.vgg16(weights=tv_models.VGG16_Weights.IMAGENET1K_V1),
+    'vit_b_16': lambda: tv_models.vit_b_16(weights=tv_models.ViT_B_16_Weights.IMAGENET1K_V1),
 }
 
 
