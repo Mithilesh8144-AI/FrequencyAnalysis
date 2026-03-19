@@ -9,7 +9,7 @@
 #   3. Run: conda activate <your-env> && bash run_experiments.sh
 
 DATA_DIR="/mnt/local_learning/data/$USER/imagenet_100k_cache"
-SCRIPT="scripts/train_phase3.2.py"
+SCRIPT="scripts/train_phase3_2.py"
 LOG_DIR="logs"
 
 mkdir -p $LOG_DIR

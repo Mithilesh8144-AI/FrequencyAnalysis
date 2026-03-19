@@ -1,0 +1,34 @@
+[project]
+name = "frequency-analysis"
+version = "0.1.0"
+description = "Frequency domain analysis of CNN inductive biases"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "numpy",
+    "matplotlib",
+    "pillow",
+    "tqdm",
+    "datasets",
+    "huggingface_hub",
+]
+
+[project.scripts]
+train-phase2 = "scripts.train_phase2:main"
+train-phase3 = "scripts.train_phase3_2:main"
+cache-imagenet = "scripts.cache_imagenet_100k:main"
+
+[dependency-groups]
+dev = [
+    "ipykernel",
+    "jupyter",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["frequency", "data", "scripts"]
