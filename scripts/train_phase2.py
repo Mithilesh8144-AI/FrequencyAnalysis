@@ -68,10 +68,10 @@ ARCH_LOADERS = {
 # Per-architecture overrides (DeiT-style for ViT)
 ARCH_HPARAMS = {
     'vit_b_16': {
-        'optimizer': 'adamw',
-        'weight_decay': 0.05,
+        'optimizer': 'adam',
+        'weight_decay': 1e-4,
         'classifier_lr': 0.001,
-        'lr_warmup_epochs': 5,
+        'lr_warmup_epochs': 0,
     },
 }
 
