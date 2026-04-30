@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
-"""Phase 2 v4: Joint training from scratch with sigmoid-bounded frequency mask.
+"""Phase 2 v5: Joint training from scratch with sigmoid-bounded frequency mask.
 
-Key differences from Phase 2 v3 (normalized mask):
-  - Sigmoid activation: mask = 2*sigmoid(weights), bounded to (0, 2).
-    Prevents explosion (v3 reached std=21) and enforces non-negativity.
-  - 100k images (v3 used 25k — far too few for 1000-class from-scratch).
-  - Gradient clipping to prevent FFT-amplified spikes.
-  - Cosine LR schedule for smoother convergence.
-  - Multi-GPU (DDP) and AMP support.
-
-Key difference from Phase 3:
-  - Classifier is randomly initialized, NOT pretrained.
-  - Both mask and classifier train jointly from scratch.
+v5 (full ImageNet) vs v4 (100k subset):
+  - Default data path expects a HuggingFace DatasetDict with native train +
+    validation splits (full ImageNet, ~1.28M / 50k). Falls back to a single
+    Dataset with 80/20 random split if a 100k-style cache is passed.
+  - Default schedule: 90 epochs + 5-epoch linear warmup (standard ImageNet).
+  - DenseNet-121 added to the architecture list (skip-connection control).
+  - Defaults assume cluster fast storage at /mnt/local_learning/data/$USER/.
 
 Usage:
   # Single GPU:
-  uv run train-phase2 --arch resnet18 --data-dir /path/to/cache
+  python3 scripts/train_phase2.py --arch resnet18 \
+      --data-dir /mnt/local_learning/data/$USER/imagenet_full
 
   # Multi-GPU:
-  uv run torchrun --nproc_per_node=4 scripts/train_phase2.py --arch resnet18 --data-dir /path/to/cache
+  torchrun --nproc_per_node=4 scripts/train_phase2.py --arch resnet18 \
+      --data-dir /mnt/local_learning/data/$USER/imagenet_full
 """
 
 import argparse
@@ -46,16 +44,16 @@ from scripts.distributed import (
     wrap_model, unwrap_model, make_dataloader, is_main,
 )
 
-# --- Hyperparameters (defaults, CNN-tuned) ---
-EPOCHS = 120
+# --- Hyperparameters (defaults, full-ImageNet schedule) ---
+EPOCHS = 90  # standard from-scratch ImageNet recipe (was 120 for 100k)
 MASK_LR = 0.005
 CLASSIFIER_LR = 0.001
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP_NORM = 1.0
 EARLY_STOP_PATIENCE = 20
 BATCH_SIZE = 64
-TRAIN_SPLIT = 0.8
-LR_WARMUP_EPOCHS = 0
+TRAIN_SPLIT = 0.8  # only used when a single-Dataset cache (e.g. 100k) is passed
+LR_WARMUP_EPOCHS = 5  # standard ImageNet warmup (was 0 for 100k)
 
 ARCH_LOADERS = {
     'resnet18': lambda: tv_models.resnet18(weights=None, num_classes=1000),
@@ -63,15 +61,18 @@ ARCH_LOADERS = {
     'alexnet': lambda: tv_models.alexnet(num_classes=1000),
     'vgg16': lambda: tv_models.vgg16(num_classes=1000),
     'vit_b_16': lambda: tv_models.vit_b_16(num_classes=1000),
+    'densenet121': lambda: tv_models.densenet121(weights=None, num_classes=1000),
 }
 
-# Per-architecture overrides (DeiT-style for ViT)
+# Per-architecture overrides.
+# ViT-B/16 follows DeiT-style training: AdamW + 5-epoch linear LR warmup.
+# Transformers are sensitive to large LR spikes early in training.
 ARCH_HPARAMS = {
     'vit_b_16': {
-        'optimizer': 'adam',
+        'optimizer': 'adamw',
         'weight_decay': 1e-4,
         'classifier_lr': 0.001,
-        'lr_warmup_epochs': 0,
+        'lr_warmup_epochs': 5,
     },
 }
 
@@ -239,7 +240,7 @@ def save_final_plots(history, results_dir, arch):
     axes[1, 1].set_title('Mask Diversity (std of effective mask)', fontweight='bold')
     axes[1, 1].grid(True, alpha=0.3)
 
-    plt.suptitle(f'{arch} Phase 2 v4: From-Scratch + Sigmoid Mask', fontsize=14, fontweight='bold')
+    plt.suptitle(f'{arch} Phase 2: From-Scratch + Sigmoid Mask', fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(results_dir / "training_history.png", dpi=150, bbox_inches='tight')
     plt.close()
@@ -249,7 +250,7 @@ def save_final_plots(history, results_dir, arch):
         mask_viz = np.load(mask_viz_path)
         fig, ax = plt.subplots(figsize=(10, 8))
         im = ax.imshow(mask_viz, cmap='RdBu_r', vmin=0.0, vmax=2.0)
-        ax.set_title(f'{arch} Phase 2 v4 Learned Mask', fontweight='bold', fontsize=14)
+        ax.set_title(f'{arch} Phase 2 Learned Mask', fontweight='bold', fontsize=14)
         ax.axis('off')
         plt.colorbar(im, ax=ax, label='Mask Weight (0=suppress, 1=pass, 2=amplify)')
         plt.savefig(results_dir / "learned_mask.png", dpi=150, bbox_inches='tight')
@@ -263,12 +264,18 @@ def main():
     parser.add_argument('--arch', type=str, required=True, choices=list(ARCH_LOADERS.keys()),
                         help="Architecture to train")
     parser.add_argument('--data-dir', type=str, default=None,
-                        help="Path to imagenet_100k_cache (default: data/imagenet_100k_cache)")
+                        help="Path to ImageNet cache. Can be either:\n"
+                             "  - DatasetDict with 'train'/'validation' splits (full ImageNet, preferred), or\n"
+                             "  - single Dataset (legacy 100k cache — falls back to 80/20 random split).\n"
+                             f"Default: /mnt/local_learning/data/$USER/imagenet_full")
+    parser.add_argument('--epochs', type=int, default=EPOCHS,
+                        help=f"Override total training epochs (default: {EPOCHS})")
     parser.add_argument('--no-amp', action='store_true',
                         help="Disable automatic mixed precision")
     parser.add_argument('--skip-fft', action='store_true',
                         help="Skip FFT/mask pipeline — train classifier only (baseline)")
     args = parser.parse_args()
+    epochs = args.epochs
 
     arch = args.arch
     rank, local_rank, world_size, device, is_distributed = setup_distributed()
@@ -287,21 +294,37 @@ def main():
         print(f"Results: {results_dir}")
 
     # --- Data ---
-    from datasets import load_from_disk
+    from datasets import load_from_disk, DatasetDict
     from torchvision import transforms
 
-    cache_path = Path(args.data_dir) if args.data_dir else PROJECT_ROOT / "data" / "imagenet_100k_cache"
+    if args.data_dir:
+        cache_path = Path(args.data_dir)
+    else:
+        default_full = Path(f"/mnt/local_learning/data/{os.environ.get('USER','user')}/imagenet_full")
+        legacy_100k = PROJECT_ROOT / "data" / "imagenet_100k_cache"
+        cache_path = default_full if default_full.exists() else legacy_100k
     if not cache_path.exists():
         if is_main(rank):
             print(f"ERROR: Cache not found at {cache_path}")
+            print("Run scripts/cache_imagenet_full.py to download the full dataset.")
         cleanup_distributed()
         sys.exit(1)
 
     if is_main(rank):
         print(f"Loading dataset from {cache_path}...")
-    imagenet_subset = load_from_disk(str(cache_path))
-    if is_main(rank):
-        print(f"Loaded {len(imagenet_subset):,} images")
+    loaded = load_from_disk(str(cache_path))
+
+    # Detect format: DatasetDict (full ImageNet, native train/val) vs Dataset (legacy 100k)
+    is_full_imagenet = isinstance(loaded, DatasetDict) and 'train' in loaded and 'validation' in loaded
+    if is_full_imagenet:
+        train_raw = loaded['train']
+        val_raw = loaded['validation']
+        if is_main(rank):
+            print(f"Loaded full ImageNet: train={len(train_raw):,}, val={len(val_raw):,}")
+    else:
+        # Legacy single-Dataset path — use 80/20 random split for backward compat
+        if is_main(rank):
+            print(f"Loaded {len(loaded):,} images (legacy single-Dataset format, using 80/20 split)")
 
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
@@ -316,13 +339,18 @@ def main():
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    train_size = int(TRAIN_SPLIT * len(imagenet_subset))
-    val_size = len(imagenet_subset) - train_size
-    generator = torch.Generator().manual_seed(42)
-    train_indices, val_indices = random_split(range(len(imagenet_subset)), [train_size, val_size], generator=generator)
+    if is_full_imagenet:
+        train_dataset = TransformSubset(train_raw, list(range(len(train_raw))), train_transform)
+        val_dataset = TransformSubset(val_raw, list(range(len(val_raw))), val_transform)
+    else:
+        imagenet_subset = loaded
+        train_size = int(TRAIN_SPLIT * len(imagenet_subset))
+        val_size = len(imagenet_subset) - train_size
+        generator = torch.Generator().manual_seed(42)
+        train_indices, val_indices = random_split(range(len(imagenet_subset)), [train_size, val_size], generator=generator)
 
-    train_dataset = TransformSubset(imagenet_subset, train_indices.indices, train_transform)
-    val_dataset = TransformSubset(imagenet_subset, val_indices.indices, val_transform)
+        train_dataset = TransformSubset(imagenet_subset, train_indices.indices, train_transform)
+        val_dataset = TransformSubset(imagenet_subset, val_indices.indices, val_transform)
 
     num_workers = min(16, os.cpu_count() or 1)
     dl_kwargs = dict(num_workers=num_workers, pin_memory=True, persistent_workers=True)
@@ -376,7 +404,7 @@ def main():
             {'params': raw_pipeline.get_classifier_params(), 'lr': classifier_lr},
         ], hp)
 
-    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     if hp['lr_warmup_epochs'] > 0:
         warmup_scheduler = optim.lr_scheduler.LinearLR(
             optimizer, start_factor=0.01, total_iters=hp['lr_warmup_epochs'])
@@ -416,10 +444,10 @@ def main():
 
     # --- Training loop ---
     if is_main(rank):
-        print(f"\nTraining for {EPOCHS} epochs (from {start_epoch})...")
+        print(f"\nTraining for {epochs} epochs (from {start_epoch})...")
         print("=" * 70)
 
-    for epoch in range(start_epoch, EPOCHS):
+    for epoch in range(start_epoch, epochs):
         epoch_start = time.time()
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
@@ -430,7 +458,7 @@ def main():
         correct5 = 0
         total = 0
 
-        loader = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}") if is_main(rank) else train_loader
+        loader = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}") if is_main(rank) else train_loader
         for batch_idx, (images, labels) in enumerate(loader):
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
@@ -478,7 +506,7 @@ def main():
         history['mask_max'].append(mask_stats['eff_max'])
 
         if is_main(rank):
-            print(f"\nEpoch {epoch+1}/{EPOCHS} ({epoch_time:.1f}s)")
+            print(f"\nEpoch {epoch+1}/{epochs} ({epoch_time:.1f}s)")
             print(f"  Train: Loss={train_loss:.4f}, Top1={train_acc1:.2f}%, Top5={train_acc5:.2f}%")
             print(f"  Val:   Loss={val_loss:.4f}, Top1={val_acc1:.2f}%, Top5={val_acc5:.2f}%")
             print(f"  Mask:  std={mask_viz.std():.4f}, min={mask_stats['eff_min']:.3f}, max={mask_stats['eff_max']:.3f}")
@@ -553,25 +581,27 @@ def main():
         np.save(results_dir / "learned_mask_viz.npy", learned_mask)
 
         with open(results_dir / "summary.txt", 'w') as f:
-            f.write(f"{arch} Phase 2 v4 - From-Scratch + Sigmoid Mask\n")
-            f.write("=" * 55 + "\n\n")
+            data_label = "full ImageNet" if is_full_imagenet else "100k subset (legacy)"
+            f.write(f"{arch} Phase 2 - From-Scratch + Sigmoid Mask ({data_label})\n")
+            f.write("=" * 65 + "\n\n")
             f.write(f"Architecture: {arch} (random initialization)\n")
+            f.write(f"Data: {data_label}\n")
             f.write(f"Train samples: {len(train_dataset):,}\n")
             f.write(f"Val samples: {len(val_dataset):,}\n")
             f.write(f"GPUs: {world_size} | AMP: {use_amp}\n")
-            f.write(f"Epochs trained: {len(history['train_acc1'])}\n")
+            f.write(f"Epochs configured: {epochs} | Trained: {len(history['train_acc1'])}\n")
             f.write(f"\nResults:\n")
             f.write(f"  Best Val Top1: {best_val_acc:.2f}%\n")
             f.write(f"  Best Val Top5: {history['val_acc5'][history['val_acc1'].index(max(history['val_acc1']))]:.2f}%\n")
-            f.write(f"\nKey fixes from v3:\n")
+            f.write(f"\nSetup:\n")
             f.write(f"  Mask activation: sigmoid (bounded 0-2, non-negative)\n")
-            f.write(f"  Data: 100k images (v3 used 25k)\n")
             f.write(f"  Gradient clipping: max_norm={GRAD_CLIP_NORM}\n")
-            f.write(f"  LR schedule: CosineAnnealingLR\n")
+            f.write(f"  LR schedule: CosineAnnealingLR with {hp['lr_warmup_epochs']}-epoch linear warmup\n")
             f.write(f"\nHyperparameters:\n")
-            f.write(f"  Mask LR: {MASK_LR}\n")
-            f.write(f"  Classifier LR: {CLASSIFIER_LR}\n")
-            f.write(f"  Weight decay: {WEIGHT_DECAY}\n")
+            f.write(f"  Optimizer: {hp['optimizer']}\n")
+            f.write(f"  Mask LR: {hp['mask_lr']} (effective {hp['mask_lr']*world_size} after lr scaling)\n")
+            f.write(f"  Classifier LR: {hp['classifier_lr']} (effective {hp['classifier_lr']*world_size} after lr scaling)\n")
+            f.write(f"  Weight decay: {hp['weight_decay']}\n")
             f.write(f"  Grad clip norm: {GRAD_CLIP_NORM}\n")
             f.write(f"  Batch size: {BATCH_SIZE} x {world_size} GPUs = {BATCH_SIZE * world_size} effective\n")
             f.write(f"  Data augmentation: RandomResizedCrop, HorizontalFlip, ColorJitter\n")

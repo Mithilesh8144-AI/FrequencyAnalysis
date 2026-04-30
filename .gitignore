@@ -1,6 +1,5 @@
-# Large model checkpoints — too big for GitHub (>100MB)
-**/checkpoint.pt
-**/best_model.pt
+# Model checkpoints / tensors — kept out of git (rerun training to regenerate)
+*.pt
 
 # Jupyter noise
 **/.ipynb_checkpoints/
