@@ -75,7 +75,20 @@ SIM2REAL_CLUSTER/    ← cluster-ready scripts (GPU training)
 | ResNet-50    | DONE   | 33.16%   | 56.86%   | 120    |
 | ViT-B/16     | RUNNING | —       | —        | —      |
 
-**v5 (full ImageNet) — TODO** for ResNet-18, ResNet-50, AlexNet, VGG-16, ViT-B/16, and DenseNet-121 (added as a stronger skip-connection control).
+**v5 (full ImageNet) status (as of 2026-05-05):**
+
+| Architecture | Status | Notes |
+|--------------|--------|-------|
+| ResNet-18    | DRY-RUN VERIFIED | 1-epoch test passed: loss 6.93→6.08, top-1 1.9% mid-epoch, ~7 min/epoch on 4 GPUs |
+| ResNet-50    | TODO | — |
+| AlexNet      | TODO | Critical — tests data-limited vs architectural |
+| VGG-16       | TODO | Same hypothesis as AlexNet |
+| DenseNet-121 | TODO | New skip-connection control |
+| ViT-B/16     | TODO | AdamW + 5-ep warmup wired |
+
+User prefers single-arch runs (Option B in commands below) over the full sequential `run_phase2_full.sh` launcher.
+
+**v4 result folders renamed to `*_phase2_v4_100k`** so v5 runs don't overwrite them. `resnet18_phase2_baseline` (no-FFT control) was deliberately not renamed.
 
 **Key finding from v4:** ResNet architectures learn from scratch through the frequency pipeline (~30% top-1 on 100k); AlexNet and VGG-16 fail completely (flat mask, 0.1% accuracy). v5 will tell us whether the AlexNet/VGG failure is genuinely architectural or just data-limited.
 
@@ -99,47 +112,53 @@ SIM2REAL_CLUSTER/    ← cluster-ready scripts (GPU training)
 
 ## Immediate TODOs
 
-1. **Cache full ImageNet on the cluster:** `python3 scripts/cache_imagenet_full.py` (one-time, ~150 GB to `/mnt/local_learning/data/$USER/imagenet_full`)
-2. **Re-run Phase 2 on full ImageNet** for all architectures (`bash run_phase2_full.sh`). Sequential, all GPUs per arch via DDP. ~1–2 days per CNN.
-3. **Phase 4 (no retraining):** apply the existing Phase 1 / Phase 2 masks to a shifted-domain testbed (ImageNet-Sketch / ImageNet-R / Stylized-ImageNet) for sim2real evaluation; include FDA (Yang & Soatto 2020) as a hand-crafted baseline.
-4. **Mask correlation analysis:** Phase 1 vs Phase 2 mask per architecture — answers whether frequency preference is inductive bias or pretraining artifact.
+1. ~~Cache full ImageNet on the cluster~~ **DONE.** Lives at `/mnt/local_learning/data/bab61wot/imagenet_full` — 156 GB, splits: train (1,281,167) + validation (50,000) + test (100,000, unused).
+2. ~~Phase 2 v5 dry-run (resnet18, 1 epoch)~~ **VERIFIED 2026-05-05.** All 5 supervisor GPU features confirmed wired in.
+3. **Phase 2 v5 real runs** — single arch at a time per user preference. Pattern: `nohup torchrun --standalone --nproc_per_node=4 scripts/train_phase2.py --arch <NAME> --data-dir /mnt/local_learning/data/$USER/imagenet_full > logs/<NAME>_phase2_full.log 2>&1 & disown`. Run order: resnet18 → resnet50 → alexnet → vgg16 → densenet121 → vit_b_16.
+4. **Phase 4 (no retraining):** apply the existing Phase 1 / Phase 2 masks to a shifted-domain testbed (ImageNet-Sketch / ImageNet-R / Stylized-ImageNet) for sim2real evaluation; include FDA (Yang & Soatto 2020) as a hand-crafted baseline.
+5. **Mask correlation analysis:** Phase 1 vs Phase 2 mask per architecture — answers whether frequency preference is inductive bias or pretraining artifact.
 
 ---
 
 ## Commands Reference (Cluster: Neptun)
 
+**Important:** Neptun home dir is shared with the user's local PC (`~/VIT/SIM2REAL_CLUSTER/`). Code edits made locally are instantly visible on the cluster — **no `git pull` needed on the cluster**. Push to GitHub is for backup/sharing only.
+
 ```bash
-# SSH
+# SSH (project is at ~/VIT/SIM2REAL_CLUSTER on cluster, NOT ~/SIM2REAL_CLUSTER)
 ssh bab61wot@neptun.cs.uni-kl.de
-cd ~/SIM2REAL_CLUSTER
+cd ~/VIT/SIM2REAL_CLUSTER
 
-# Pull latest code
-git pull
+# Phase 2 v5 — single arch (preferred), all 4 GPUs via DDP, 90 epochs default
+ARCH=resnet18  # or resnet50, alexnet, vgg16, densenet121, vit_b_16
+mkdir -p logs
+nohup torchrun --standalone --nproc_per_node=4 scripts/train_phase2.py \
+    --arch $ARCH --data-dir /mnt/local_learning/data/$USER/imagenet_full \
+    > logs/${ARCH}_phase2_full.log 2>&1 &
+disown
 
-# One-time: cache full ImageNet (~150 GB to fast local NVMe)
-huggingface-cli login
-python3 scripts/cache_imagenet_full.py \
-    --output /mnt/local_learning/data/$USER/imagenet_full
-
-# Phase 2 (full ImageNet) — DDP, all GPUs per arch, sequential
+# Phase 2 v5 — full sequential launcher (all 6 archs back-to-back, ~5-7 days total)
 nohup bash run_phase2_full.sh > logs/master_phase2_full.log 2>&1 &
+disown
 
-# Single arch (testing) — uses 4-GPU DDP
-torchrun --standalone --nproc_per_node=4 scripts/train_phase2.py \
-    --arch resnet18 --data-dir /mnt/local_learning/data/$USER/imagenet_full
-
-# Phase 3.2 (legacy 100k path)
-nohup bash run_experiments.sh > logs/master.log 2>&1 &
+# Dry-run (single epoch, foreground — for pipeline verification)
+torchrun --standalone --nproc_per_node=4 scripts/train_phase2.py --arch resnet18 --data-dir /mnt/local_learning/data/$USER/imagenet_full --epochs 1
+# IMPORTANT: paste the dry-run on ONE line — backslash line continuations break with trailing whitespace
 
 # Monitor
-tail -f logs/<arch>_phase2_full.log
-
-# Check running jobs
+tail -f logs/${ARCH}_phase2_full.log
+nvidia-smi
 ps aux | grep train_phase
+
+# Auto-resume (rerun the same nohup-torchrun command — checkpoint.pt is loaded automatically)
+
+# Kill all training
+pkill -f train_phase2.py
 ```
 
-**Data:** `/mnt/local_learning/data/$USER/imagenet_full` (full ImageNet, must be cached first). Legacy 100k path still works via `--data-dir /mnt/local_learning/data/$USER/imagenet_100k_cache`.
-**Results:** `experiments/results/{arch}_phase2/` and `experiments/results/{arch}_phase3.2/`
+**Data:** `/mnt/local_learning/data/bab61wot/imagenet_full` (already cached, 156 GB DatasetDict).
+**Results:** `experiments/results/{arch}_phase2/` (v5 outputs) and `experiments/results/{arch}_phase2_v4_100k/` (v4 backups).
+**Runbook:** `RUNBOOK.md` has the full step-by-step playbook.
 
 ---
 
@@ -149,7 +168,11 @@ ps aux | grep train_phase
 - Phase 2 mask: `activation='sigmoid'` — bounded (0, 2), explosion-proof
 - Phase 3.2 mask: `normalize=True` — mean forced to 1.0 (fine for pretrained, no collapse risk)
 - `train_phase2.py` auto-detects `DatasetDict` (full) vs `Dataset` (100k legacy)
-- GPU utilization features (all in place): DDP one-process-per-GPU, AMP autocast+GradScaler, linear LR scaling × world_size, `persistent_workers=True` + `pin_memory=True`, ViT-B/16 uses AdamW + 5-epoch linear warmup
+- GPU utilization features (all in place, verified in v5 dry-run): DDP one-process-per-GPU, AMP autocast+GradScaler, linear LR scaling × world_size, `persistent_workers=True` + `pin_memory=True`, ViT-B/16 uses AdamW + 5-epoch linear warmup
 - Neptun cluster: 4× RTX 6000 Ada GPUs, shared home dir (no rsync needed for code)
 - Always stage data on `/mnt/local_learning/data/$USER/` — home dir reads bottleneck training
 - Script renamed: `train_phase3.2.py` → `train_phase3_2.py` (underscore)
+- `.gitignore` excludes all `*.pt` files — checkpoints/masks are not pushed to GitHub. Rerun training on cluster to regenerate.
+- "Corrupt EXIF data" warnings during training are harmless (malformed metadata in some ImageNet images, PIL loads them fine)
+- Project lives at `~/VIT/SIM2REAL_CLUSTER` on cluster (not `~/SIM2REAL_CLUSTER`)
+- GitHub remote: `git@github.com:Mithilesh8144-AI/FrequencyAnalysis.git`
