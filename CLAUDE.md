@@ -129,6 +129,9 @@ User prefers single-arch runs (Option B in commands below) over the full sequent
 ssh bab61wot@neptun.cs.uni-kl.de
 cd ~/VIT/SIM2REAL_CLUSTER
 
+# Optional but recommended: send Python tempdirs to local NVMe to avoid NFS .nfs* cleanup spam at process exit
+export TMPDIR=/mnt/local_learning/data/$USER/tmp && mkdir -p $TMPDIR
+
 # Phase 2 v5 — single arch (preferred), all 4 GPUs via DDP, 90 epochs default
 ARCH=resnet18  # or resnet50, alexnet, vgg16, densenet121, vit_b_16
 mkdir -p logs
@@ -146,15 +149,23 @@ torchrun --standalone --nproc_per_node=4 scripts/train_phase2.py --arch resnet18
 # IMPORTANT: paste the dry-run on ONE line — backslash line continuations break with trailing whitespace
 
 # Monitor
-tail -f logs/${ARCH}_phase2_full.log
-nvidia-smi
-ps aux | grep train_phase
+tail -f logs/${ARCH}_phase2_full.log              # follow current run
+tail -50 logs/${ARCH}_phase2_full.log             # last 50 lines (after reconnecting)
+grep "New best" logs/${ARCH}_phase2_full.log      # all val accuracy improvements
+nvidia-smi                                        # GPU util, all 4 should be ~95%+
+ps aux | grep train_phase2 | grep -v grep         # is training still alive?
 
-# Auto-resume (rerun the same nohup-torchrun command — checkpoint.pt is loaded automatically)
-
-# Kill all training
+# Stop training (graceful — checkpoint at last completed epoch is preserved)
 pkill -f train_phase2.py
+ps aux | grep train_phase2 | grep -v grep         # verify all 4 workers gone
+
+# Resume after a stop — same command as launch above. Auto-loads checkpoint.pt
+# from experiments/results/${ARCH}_phase2/ if present. Look for "Resuming from
+# checkpoint at epoch N" in the log to confirm. Note: checkpoints are written
+# at end-of-epoch, so killing mid-epoch loses that partial epoch.
 ```
+
+**Disconnecting SSH while training:** after `disown`, training is fully detached from the shell. Press `Ctrl+C` to stop `tail`-ing, then `exit` to close SSH. Training keeps running.
 
 **Data:** `/mnt/local_learning/data/bab61wot/imagenet_full` (already cached, 156 GB DatasetDict).
 **Results:** `experiments/results/{arch}_phase2/` (v5 outputs) and `experiments/results/{arch}_phase2_v4_100k/` (v4 backups).
