@@ -10,3 +10,8 @@ __pycache__/
 
 # Virtual environment
 .venv/
+logs/
+scripts/logs/
+nohup.out
+experiments/results/*/mask_epoch_*.png
+experiments/results/*_v4_100k/

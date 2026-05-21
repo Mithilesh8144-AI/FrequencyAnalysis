@@ -51,7 +51,8 @@ CLASSIFIER_LR = 0.001
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP_NORM = 1.0
 EARLY_STOP_PATIENCE = 20
-BATCH_SIZE = 64
+BATCH_SIZE = 256
+BASE_BATCH_SIZE = 64
 TRAIN_SPLIT = 0.8  # only used when a single-Dataset cache (e.g. 100k) is passed
 LR_WARMUP_EPOCHS = 5  # standard ImageNet warmup (was 0 for 100k)
 
@@ -352,8 +353,8 @@ def main():
         train_dataset = TransformSubset(imagenet_subset, train_indices.indices, train_transform)
         val_dataset = TransformSubset(imagenet_subset, val_indices.indices, val_transform)
 
-    num_workers = min(16, os.cpu_count() or 1)
-    dl_kwargs = dict(num_workers=num_workers, pin_memory=True, persistent_workers=True)
+    num_workers = min(10, os.cpu_count() or 1)
+    dl_kwargs = dict(num_workers=num_workers, pin_memory=True, persistent_workers=True,prefetch_factor=4)
 
     train_loader, train_sampler = make_dataloader(
         train_dataset, batch_size=BATCH_SIZE, shuffle=True, is_distributed=is_distributed, **dl_kwargs)

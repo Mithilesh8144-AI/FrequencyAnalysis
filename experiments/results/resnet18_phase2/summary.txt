@@ -1,26 +1,27 @@
-resnet18 Phase 2 v4 - From-Scratch + Sigmoid Mask
-=======================================================
+resnet18 Phase 2 - From-Scratch + Sigmoid Mask (full ImageNet)
+=================================================================
 
 Architecture: resnet18 (random initialization)
-Train samples: 80,000
-Val samples: 20,000
-GPUs: 4 | AMP: True
-Epochs trained: 120
+Data: full ImageNet
+Train samples: 1,281,167
+Val samples: 50,000
+GPUs: 3 | AMP: True
+Epochs configured: 90 | Trained: 90
 
 Results:
-  Best Val Top1: 30.98%
-  Best Val Top5: 54.86%
+  Best Val Top1: 61.27%
+  Best Val Top5: 84.56%
 
-Key fixes from v3:
+Setup:
   Mask activation: sigmoid (bounded 0-2, non-negative)
-  Data: 100k images (v3 used 25k)
   Gradient clipping: max_norm=1.0
-  LR schedule: CosineAnnealingLR
+  LR schedule: CosineAnnealingLR with 5-epoch linear warmup
 
 Hyperparameters:
-  Mask LR: 0.005
-  Classifier LR: 0.001
+  Optimizer: adam
+  Mask LR: 0.005 (effective 0.015 after lr scaling)
+  Classifier LR: 0.001 (effective 0.003 after lr scaling)
   Weight decay: 0.0001
   Grad clip norm: 1.0
-  Batch size: 64 x 4 GPUs = 256 effective
+  Batch size: 256 x 3 GPUs = 768 effective
   Data augmentation: RandomResizedCrop, HorizontalFlip, ColorJitter
