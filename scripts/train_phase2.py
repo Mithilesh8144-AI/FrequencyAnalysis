@@ -275,8 +275,14 @@ def main():
                         help="Disable automatic mixed precision")
     parser.add_argument('--skip-fft', action='store_true',
                         help="Skip FFT/mask pipeline — train classifier only (baseline)")
+    parser.add_argument('--mask-reg', type=float, default=0.0,
+                        help="Anti-identity regularizer strength. Adds loss term "
+                             "-lambda * mean((effective_mask - 1.0)**2). Rewards mask "
+                             "values for moving away from identity (1.0). Default 0.0 "
+                             "= disabled. Try 0.01-0.1 to combat mask collapse.")
     args = parser.parse_args()
     epochs = args.epochs
+    mask_reg = args.mask_reg
 
     arch = args.arch
     rank, local_rank, world_size, device, is_distributed = setup_distributed()
@@ -288,7 +294,12 @@ def main():
         if torch.cuda.is_available():
             print(f"GPU: {torch.cuda.get_device_name(local_rank)}")
 
-    suffix = "_phase2_baseline" if args.skip_fft else "_phase2"
+    if args.skip_fft:
+        suffix = "_phase2_baseline"
+    elif mask_reg > 0:
+        suffix = f"_phase2_regularized_lambda{mask_reg:g}"
+    else:
+        suffix = "_phase2"
     results_dir = PROJECT_ROOT / "experiments" / "results" / f"{arch}{suffix}"
     if is_main(rank):
         results_dir.mkdir(parents=True, exist_ok=True)
@@ -392,6 +403,8 @@ def main():
             print(f"  LR warmup: {hp['lr_warmup_epochs']} epochs")
         if world_size > 1:
             print(f"  LR scaling: x{world_size} (mask: {hp['mask_lr']}->{mask_lr}, classifier: {hp['classifier_lr']}->{classifier_lr})")
+        if mask_reg > 0:
+            print(f"  Anti-identity reg: lambda={mask_reg} (loss -= {mask_reg} * mean((eff_mask - 1)^2))")
 
     criterion = nn.CrossEntropyLoss()
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -420,6 +433,7 @@ def main():
         'train_loss': [], 'train_acc1': [], 'train_acc5': [],
         'val_loss': [], 'val_acc1': [], 'val_acc5': [],
         'mask_std': [], 'mask_min': [], 'mask_max': [],
+        'mask_reg_loss': [],
     }
     best_val_acc = 0.0
     patience_counter = 0
@@ -455,6 +469,7 @@ def main():
 
         pipeline.train()
         train_loss = 0.0
+        train_reg_loss = 0.0
         correct1 = 0
         correct5 = 0
         total = 0
@@ -467,6 +482,12 @@ def main():
             with torch.amp.autocast("cuda", enabled=use_amp):
                 outputs, _ = pipeline(images)
                 loss = criterion(outputs, labels)
+                if mask_reg > 0 and not args.skip_fft:
+                    eff = raw_pipeline.freq_mask._apply_activation(
+                        raw_pipeline.freq_mask.mask_weights)
+                    reg_term = -((eff - 1.0) ** 2).mean()
+                    loss = loss + mask_reg * reg_term
+                    train_reg_loss += reg_term.item()
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -505,12 +526,16 @@ def main():
         history['mask_std'].append(float(mask_viz.std()))
         history['mask_min'].append(mask_stats['eff_min'])
         history['mask_max'].append(mask_stats['eff_max'])
+        mean_reg_loss = train_reg_loss / len(train_loader) if mask_reg > 0 else 0.0
+        history['mask_reg_loss'].append(mean_reg_loss)
 
         if is_main(rank):
             print(f"\nEpoch {epoch+1}/{epochs} ({epoch_time:.1f}s)")
             print(f"  Train: Loss={train_loss:.4f}, Top1={train_acc1:.2f}%, Top5={train_acc5:.2f}%")
             print(f"  Val:   Loss={val_loss:.4f}, Top1={val_acc1:.2f}%, Top5={val_acc5:.2f}%")
             print(f"  Mask:  std={mask_viz.std():.4f}, min={mask_stats['eff_min']:.3f}, max={mask_stats['eff_max']:.3f}")
+            if mask_reg > 0:
+                print(f"  Reg:   -mean((eff-1)^2)={mean_reg_loss:.5f}  (contributes {mask_reg*mean_reg_loss:+.5f} to loss)")
             print(f"  Gap:   {train_acc1 - val_acc1:.2f}% top1 (train - val)")
 
             # Save mask heatmap every epoch
@@ -606,6 +631,11 @@ def main():
             f.write(f"  Grad clip norm: {GRAD_CLIP_NORM}\n")
             f.write(f"  Batch size: {BATCH_SIZE} x {world_size} GPUs = {BATCH_SIZE * world_size} effective\n")
             f.write(f"  Data augmentation: RandomResizedCrop, HorizontalFlip, ColorJitter\n")
+            f.write(f"  Anti-identity regularizer lambda: {mask_reg}")
+            if mask_reg > 0:
+                final_reg = history['mask_reg_loss'][-1] if history['mask_reg_loss'] else 0.0
+                f.write(f"  (final mean -(eff-1)^2 = {final_reg:.5f})")
+            f.write("\n")
 
         save_final_plots(history, results_dir, arch)
         print(f"\nAll artifacts saved to: {results_dir}")
