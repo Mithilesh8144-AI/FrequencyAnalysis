@@ -1,0 +1,26 @@
+vgg16 Phase 2 v4 - From-Scratch + Sigmoid Mask
+=======================================================
+
+Architecture: vgg16 (random initialization)
+Train samples: 80,000
+Val samples: 20,000
+GPUs: 4 | AMP: True
+Epochs trained: 21
+
+Results:
+  Best Val Top1: 0.16%
+  Best Val Top5: 0.46%
+
+Key fixes from v3:
+  Mask activation: sigmoid (bounded 0-2, non-negative)
+  Data: 100k images (v3 used 25k)
+  Gradient clipping: max_norm=1.0
+  LR schedule: CosineAnnealingLR
+
+Hyperparameters:
+  Mask LR: 0.005
+  Classifier LR: 0.001
+  Weight decay: 0.0001
+  Grad clip norm: 1.0
+  Batch size: 64 x 4 GPUs = 256 effective
+  Data augmentation: RandomResizedCrop, HorizontalFlip, ColorJitter

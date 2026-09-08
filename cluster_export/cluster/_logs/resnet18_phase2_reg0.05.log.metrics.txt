@@ -1,0 +1,271 @@
+Train: 1,281,167 | Val: 50,000
+Epoch 1/90 (476.9s)
+  Train: Loss=6.1525, Top1=2.72%, Top5=8.51%
+  Val:   Loss=5.7495, Top1=4.62%, Top5=13.19%
+  Mask:  std=0.0081, min=0.871, max=1.109
+  Reg:   -mean((eff-1)^2)=-0.00070  (contributes -0.00003 to loss)
+  Gap:   -1.90% top1 (train - val)
+  ** New best: 4.62% (top5=13.19%) **
+Epoch 2/90 (498.2s)
+  Train: Loss=4.4423, Top1=14.78%, Top5=33.97%
+  Val:   Loss=4.3345, Top1=15.64%, Top5=36.46%
+  Mask:  std=0.0110, min=0.286, max=1.034
+  Reg:   -mean((eff-1)^2)=-0.00007  (contributes -0.00000 to loss)
+  Gap:   -0.86% top1 (train - val)
+  ** New best: 15.64% (top5=36.46%) **
+Epoch 3/90 (512.2s)
+  Train: Loss=3.3730, Top1=28.19%, Top5=54.18%
+  Val:   Loss=3.6804, Top1=24.53%, Top5=49.28%
+  Mask:  std=0.0169, min=0.231, max=1.060
+  Reg:   -mean((eff-1)^2)=-0.00024  (contributes -0.00001 to loss)
+  Gap:   3.65% top1 (train - val)
+  ** New best: 24.53% (top5=49.28%) **
+Epoch 4/90 (494.8s)
+  Train: Loss=2.9486, Top1=35.20%, Top5=62.29%
+  Val:   Loss=3.1460, Top1=32.17%, Top5=58.64%
+  Mask:  std=0.0207, min=0.222, max=1.104
+  Reg:   -mean((eff-1)^2)=-0.00041  (contributes -0.00002 to loss)
+  Gap:   3.03% top1 (train - val)
+  ** New best: 32.17% (top5=58.64%) **
+Epoch 5/90 (500.4s)
+  Train: Loss=2.7492, Top1=38.75%, Top5=65.92%
+  Val:   Loss=2.9939, Top1=34.91%, Top5=61.52%
+  Mask:  std=0.0253, min=0.210, max=1.121
+  Reg:   -mean((eff-1)^2)=-0.00060  (contributes -0.00003 to loss)
+  Gap:   3.84% top1 (train - val)
+  ** New best: 34.91% (top5=61.52%) **
+Train: 1,281,167 | Val: 50,000
+Epoch 6/90 (611.9s)
+  Train: Loss=2.6465, Top1=40.64%, Top5=67.73%
+  Val:   Loss=3.2570, Top1=31.51%, Top5=57.69%
+  Mask:  std=0.0286, min=0.197, max=1.159
+  Reg:   -mean((eff-1)^2)=-0.00078  (contributes -0.00004 to loss)
+  Gap:   9.13% top1 (train - val)
+Epoch 7/90 (623.1s)
+  Train: Loss=2.5239, Top1=43.05%, Top5=69.83%
+  Val:   Loss=2.8985, Top1=36.43%, Top5=63.24%
+  Mask:  std=0.0282, min=0.194, max=1.128
+  Reg:   -mean((eff-1)^2)=-0.00081  (contributes -0.00004 to loss)
+  Gap:   6.63% top1 (train - val)
+  ** New best: 36.43% (top5=63.24%) **
+Epoch 8/90 (634.2s)
+  Train: Loss=2.4613, Top1=44.20%, Top5=70.86%
+  Val:   Loss=2.9407, Top1=36.52%, Top5=62.96%
+  Mask:  std=0.0287, min=0.201, max=1.170
+  Reg:   -mean((eff-1)^2)=-0.00081  (contributes -0.00004 to loss)
+  Gap:   7.68% top1 (train - val)
+  ** New best: 36.52% (top5=62.96%) **
+Epoch 9/90 (629.4s)
+  Train: Loss=2.4096, Top1=45.18%, Top5=71.81%
+  Val:   Loss=2.7636, Top1=38.71%, Top5=65.69%
+  Mask:  std=0.0282, min=0.193, max=1.126
+  Reg:   -mean((eff-1)^2)=-0.00082  (contributes -0.00004 to loss)
+  Gap:   6.47% top1 (train - val)
+  ** New best: 38.71% (top5=65.69%) **
+Epoch 10/90 (630.5s)
+  Train: Loss=2.3839, Top1=45.56%, Top5=72.15%
+  Val:   Loss=2.8839, Top1=37.54%, Top5=63.68%
+  Mask:  std=0.0295, min=0.195, max=1.128
+  Reg:   -mean((eff-1)^2)=-0.00083  (contributes -0.00004 to loss)
+  Gap:   8.02% top1 (train - val)
+Epoch 11/90 (651.4s)
+  Train: Loss=2.3602, Top1=46.01%, Top5=72.56%
+  Val:   Loss=2.7304, Top1=38.93%, Top5=67.07%
+  Mask:  std=0.0291, min=0.196, max=1.143
+  Reg:   -mean((eff-1)^2)=-0.00083  (contributes -0.00004 to loss)
+  Gap:   7.08% top1 (train - val)
+  ** New best: 38.93% (top5=67.07%) **
+Epoch 12/90 (633.4s)
+  Train: Loss=2.3440, Top1=46.34%, Top5=72.92%
+  Val:   Loss=2.5938, Top1=41.89%, Top5=68.90%
+  Mask:  std=0.0287, min=0.206, max=1.131
+  Reg:   -mean((eff-1)^2)=-0.00082  (contributes -0.00004 to loss)
+  Gap:   4.45% top1 (train - val)
+  ** New best: 41.89% (top5=68.90%) **
+Epoch 13/90 (664.0s)
+  Train: Loss=2.3263, Top1=46.66%, Top5=73.12%
+  Val:   Loss=2.7279, Top1=39.95%, Top5=66.59%
+  Mask:  std=0.0286, min=0.199, max=1.138
+  Reg:   -mean((eff-1)^2)=-0.00082  (contributes -0.00004 to loss)
+  Gap:   6.71% top1 (train - val)
+Epoch 14/90 (695.7s)
+  Train: Loss=2.3193, Top1=46.74%, Top5=73.27%
+  Val:   Loss=2.7834, Top1=39.00%, Top5=65.47%
+  Mask:  std=0.0285, min=0.207, max=1.127
+  Reg:   -mean((eff-1)^2)=-0.00081  (contributes -0.00004 to loss)
+  Gap:   7.74% top1 (train - val)
+Epoch 15/90 (668.5s)
+  Train: Loss=2.3064, Top1=47.03%, Top5=73.45%
+  Val:   Loss=2.7211, Top1=39.43%, Top5=66.70%
+  Mask:  std=0.0289, min=0.207, max=1.151
+  Reg:   -mean((eff-1)^2)=-0.00081  (contributes -0.00004 to loss)
+  Gap:   7.60% top1 (train - val)
+Epoch 16/90 (687.1s)
+  Train: Loss=2.2998, Top1=47.10%, Top5=73.54%
+  Val:   Loss=2.6538, Top1=40.27%, Top5=67.44%
+  Mask:  std=0.0283, min=0.201, max=1.136
+  Reg:   -mean((eff-1)^2)=-0.00081  (contributes -0.00004 to loss)
+  Gap:   6.83% top1 (train - val)
+Epoch 17/90 (663.7s)
+  Train: Loss=2.2892, Top1=47.36%, Top5=73.74%
+  Val:   Loss=2.8980, Top1=37.32%, Top5=63.82%
+  Mask:  std=0.0287, min=0.204, max=1.152
+  Reg:   -mean((eff-1)^2)=-0.00080  (contributes -0.00004 to loss)
+  Gap:   10.04% top1 (train - val)
+Epoch 18/90 (661.7s)
+  Train: Loss=2.2847, Top1=47.45%, Top5=73.90%
+  Val:   Loss=2.6882, Top1=40.88%, Top5=67.88%
+  Mask:  std=0.0280, min=0.212, max=1.126
+  Reg:   -mean((eff-1)^2)=-0.00079  (contributes -0.00004 to loss)
+  Gap:   6.57% top1 (train - val)
+Epoch 19/90 (663.1s)
+  Train: Loss=2.2753, Top1=47.64%, Top5=73.96%
+  Val:   Loss=2.6192, Top1=41.72%, Top5=68.95%
+  Mask:  std=0.0280, min=0.210, max=1.124
+  Reg:   -mean((eff-1)^2)=-0.00078  (contributes -0.00004 to loss)
+  Gap:   5.92% top1 (train - val)
+Epoch 20/90 (638.0s)
+  Train: Loss=2.2708, Top1=47.77%, Top5=74.01%
+  Val:   Loss=2.5807, Top1=42.20%, Top5=69.31%
+  Mask:  std=0.0279, min=0.222, max=1.158
+  Reg:   -mean((eff-1)^2)=-0.00077  (contributes -0.00004 to loss)
+  Gap:   5.58% top1 (train - val)
+  ** New best: 42.20% (top5=69.31%) **
+Epoch 21/90 (639.3s)
+  Train: Loss=2.2619, Top1=48.01%, Top5=74.19%
+  Val:   Loss=2.5523, Top1=42.45%, Top5=69.46%
+  Mask:  std=0.0273, min=0.213, max=1.111
+  Reg:   -mean((eff-1)^2)=-0.00077  (contributes -0.00004 to loss)
+  Gap:   5.56% top1 (train - val)
+  ** New best: 42.45% (top5=69.46%) **
+Epoch 22/90 (643.6s)
+  Train: Loss=2.2504, Top1=48.13%, Top5=74.32%
+  Val:   Loss=2.6382, Top1=41.02%, Top5=68.13%
+  Mask:  std=0.0274, min=0.227, max=1.116
+  Reg:   -mean((eff-1)^2)=-0.00076  (contributes -0.00004 to loss)
+  Gap:   7.12% top1 (train - val)
+Epoch 23/90 (648.4s)
+  Train: Loss=2.2445, Top1=48.22%, Top5=74.45%
+  Val:   Loss=2.4862, Top1=44.08%, Top5=70.72%
+  Mask:  std=0.0267, min=0.208, max=1.132
+  Reg:   -mean((eff-1)^2)=-0.00075  (contributes -0.00004 to loss)
+  Gap:   4.14% top1 (train - val)
+  ** New best: 44.08% (top5=70.72%) **
+Epoch 24/90 (639.9s)
+  Train: Loss=2.2391, Top1=48.34%, Top5=74.54%
+  Val:   Loss=2.4979, Top1=43.48%, Top5=70.31%
+  Mask:  std=0.0274, min=0.212, max=1.112
+  Reg:   -mean((eff-1)^2)=-0.00074  (contributes -0.00004 to loss)
+  Gap:   4.87% top1 (train - val)
+Epoch 25/90 (618.9s)
+  Train: Loss=2.2284, Top1=48.65%, Top5=74.63%
+  Val:   Loss=2.5418, Top1=43.28%, Top5=69.79%
+  Mask:  std=0.0267, min=0.218, max=1.152
+  Reg:   -mean((eff-1)^2)=-0.00073  (contributes -0.00004 to loss)
+  Gap:   5.37% top1 (train - val)
+Epoch 26/90 (619.9s)
+  Train: Loss=2.2268, Top1=48.50%, Top5=74.76%
+  Val:   Loss=2.6443, Top1=41.10%, Top5=68.22%
+  Mask:  std=0.0271, min=0.216, max=1.114
+  Reg:   -mean((eff-1)^2)=-0.00073  (contributes -0.00004 to loss)
+  Gap:   7.40% top1 (train - val)
+Epoch 27/90 (614.5s)
+  Train: Loss=2.2221, Top1=48.73%, Top5=74.83%
+  Val:   Loss=2.5469, Top1=43.00%, Top5=69.77%
+  Mask:  std=0.0265, min=0.220, max=1.146
+  Reg:   -mean((eff-1)^2)=-0.00071  (contributes -0.00004 to loss)
+  Gap:   5.73% top1 (train - val)
+Epoch 28/90 (608.9s)
+  Train: Loss=2.2148, Top1=48.88%, Top5=74.95%
+  Val:   Loss=2.7712, Top1=38.86%, Top5=65.45%
+  Mask:  std=0.0264, min=0.218, max=1.119
+  Reg:   -mean((eff-1)^2)=-0.00070  (contributes -0.00004 to loss)
+  Gap:   10.02% top1 (train - val)
+Epoch 29/90 (618.8s)
+  Train: Loss=2.2072, Top1=48.99%, Top5=75.08%
+  Val:   Loss=2.5186, Top1=43.24%, Top5=70.06%
+  Mask:  std=0.0267, min=0.209, max=1.123
+  Reg:   -mean((eff-1)^2)=-0.00069  (contributes -0.00003 to loss)
+  Gap:   5.75% top1 (train - val)
+Epoch 30/90 (619.1s)
+  Train: Loss=2.1863, Top1=49.33%, Top5=75.41%
+  Val:   Loss=2.4992, Top1=44.09%, Top5=70.55%
+  Mask:  std=0.0262, min=0.232, max=1.131
+  Reg:   -mean((eff-1)^2)=-0.00068  (contributes -0.00003 to loss)
+  Gap:   5.23% top1 (train - val)
+  ** New best: 44.09% (top5=70.55%) **
+Epoch 31/90 (611.3s)
+  Train: Loss=2.1883, Top1=49.34%, Top5=75.40%
+  Val:   Loss=2.5258, Top1=43.49%, Top5=69.97%
+  Mask:  std=0.0262, min=0.227, max=1.120
+  Reg:   -mean((eff-1)^2)=-0.00066  (contributes -0.00003 to loss)
+  Gap:   5.85% top1 (train - val)
+Epoch 32/90 (629.1s)
+  Train: Loss=2.1806, Top1=49.51%, Top5=75.51%
+  Val:   Loss=2.5368, Top1=42.87%, Top5=70.04%
+  Mask:  std=0.0256, min=0.231, max=1.106
+  Reg:   -mean((eff-1)^2)=-0.00066  (contributes -0.00003 to loss)
+  Gap:   6.64% top1 (train - val)
+Epoch 33/90 (641.6s)
+  Train: Loss=2.1738, Top1=49.59%, Top5=75.68%
+  Val:   Loss=2.4118, Top1=45.22%, Top5=71.98%
+  Mask:  std=0.0252, min=0.222, max=1.128
+  Reg:   -mean((eff-1)^2)=-0.00064  (contributes -0.00003 to loss)
+  Gap:   4.37% top1 (train - val)
+  ** New best: 45.22% (top5=71.98%) **
+Epoch 34/90 (647.5s)
+  Train: Loss=2.1606, Top1=49.90%, Top5=75.81%
+  Val:   Loss=2.5914, Top1=42.13%, Top5=69.09%
+  Mask:  std=0.0255, min=0.230, max=1.128
+  Reg:   -mean((eff-1)^2)=-0.00063  (contributes -0.00003 to loss)
+  Gap:   7.78% top1 (train - val)
+Epoch 35/90 (654.1s)
+  Train: Loss=2.1521, Top1=50.13%, Top5=75.89%
+  Val:   Loss=2.4174, Top1=45.48%, Top5=71.94%
+  Mask:  std=0.0251, min=0.227, max=1.116
+  Reg:   -mean((eff-1)^2)=-0.00061  (contributes -0.00003 to loss)
+  Gap:   4.65% top1 (train - val)
+  ** New best: 45.48% (top5=71.94%) **
+Epoch 36/90 (652.3s)
+  Train: Loss=2.1404, Top1=50.24%, Top5=76.16%
+  Val:   Loss=2.4451, Top1=44.63%, Top5=71.50%
+  Mask:  std=0.0241, min=0.234, max=1.128
+  Reg:   -mean((eff-1)^2)=-0.00060  (contributes -0.00003 to loss)
+  Gap:   5.61% top1 (train - val)
+Epoch 37/90 (639.8s)
+  Train: Loss=2.1348, Top1=50.43%, Top5=76.20%
+  Val:   Loss=2.4513, Top1=44.12%, Top5=71.39%
+  Mask:  std=0.0247, min=0.232, max=1.114
+  Reg:   -mean((eff-1)^2)=-0.00059  (contributes -0.00003 to loss)
+  Gap:   6.31% top1 (train - val)
+Epoch 38/90 (662.8s)
+  Train: Loss=2.1255, Top1=50.59%, Top5=76.35%
+  Val:   Loss=2.5948, Top1=42.47%, Top5=68.88%
+  Mask:  std=0.0239, min=0.235, max=1.137
+  Reg:   -mean((eff-1)^2)=-0.00058  (contributes -0.00003 to loss)
+  Gap:   8.12% top1 (train - val)
+Epoch 39/90 (646.1s)
+  Train: Loss=2.1121, Top1=50.89%, Top5=76.55%
+  Val:   Loss=2.3922, Top1=45.99%, Top5=72.26%
+  Mask:  std=0.0235, min=0.238, max=1.158
+  Reg:   -mean((eff-1)^2)=-0.00056  (contributes -0.00003 to loss)
+  Gap:   4.90% top1 (train - val)
+  ** New best: 45.99% (top5=72.26%) **
+Epoch 40/90 (646.4s)
+  Train: Loss=2.1082, Top1=50.87%, Top5=76.67%
+  Val:   Loss=2.4377, Top1=45.26%, Top5=71.71%
+  Mask:  std=0.0231, min=0.248, max=1.117
+  Reg:   -mean((eff-1)^2)=-0.00055  (contributes -0.00003 to loss)
+  Gap:   5.61% top1 (train - val)
+Epoch 41/90 (634.8s)
+  Train: Loss=2.0970, Top1=51.15%, Top5=76.83%
+  Val:   Loss=2.3785, Top1=45.64%, Top5=72.64%
+  Mask:  std=0.0231, min=0.238, max=1.112
+  Reg:   -mean((eff-1)^2)=-0.00053  (contributes -0.00003 to loss)
+  Gap:   5.51% top1 (train - val)
+Epoch 42/90 (635.5s)
+  Train: Loss=2.0839, Top1=51.37%, Top5=77.05%
+  Val:   Loss=2.4574, Top1=44.27%, Top5=71.14%
+  Mask:  std=0.0229, min=0.244, max=1.103
+  Reg:   -mean((eff-1)^2)=-0.00052  (contributes -0.00003 to loss)
+  Gap:   7.11% top1 (train - val)

@@ -1,0 +1,12 @@
+VGG-16 - Experiment 3 Summary
+============================================================
+
+model: VGG-16
+experiment: Experiment 3 - 2D Learnable Frequency Mask
+dataset_size: 25000
+baseline_accuracy: 69.476
+final_accuracy: 65.772
+improvement: -3.7039999999999935
+epochs: 20
+learning_rate: 0.01
+mask_parameters: 50176

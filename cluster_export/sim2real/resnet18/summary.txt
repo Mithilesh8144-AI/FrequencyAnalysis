@@ -1,0 +1,12 @@
+ResNet-18 - Experiment 3 Summary
+============================================================
+
+model: ResNet-18
+experiment: Experiment 3 - 2D Learnable Frequency Mask
+dataset_size: 25000
+baseline_accuracy: 65.704
+final_accuracy: 67.244
+improvement: 1.5400000000000063
+epochs: 20
+learning_rate: 0.01
+mask_parameters: 50176
