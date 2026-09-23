@@ -242,6 +242,13 @@ def load_pool_split(pool_path, train_frac, split_seed):
 
 
 def make_loader(dataset, batch_size, shuffle, seed, workers=8):
+    """persistent_workers is deliberately OFF.
+
+    Worker processes hold their own copy of the dataset object. With persistent
+    workers, a parent-side `set_epoch()` never reaches them, so every epoch would
+    silently reuse the first epoch's augmentation. Recreating workers each epoch
+    costs a little startup time and keeps the epoch-dependent augmentation real.
+    """
     gen = torch.Generator()
     gen.manual_seed(seed)
 
@@ -253,7 +260,7 @@ def make_loader(dataset, batch_size, shuffle, seed, workers=8):
     return DataLoader(
         dataset, batch_size=batch_size, shuffle=shuffle, generator=gen if shuffle else None,
         num_workers=workers, pin_memory=True, worker_init_fn=_winit,
-        persistent_workers=workers > 0, drop_last=False,
+        persistent_workers=False, drop_last=False,
     )
 
 
@@ -295,21 +302,64 @@ def save_rows(rows, path):
             f.write("%d,%d,%d,%d,%d,%.6f\n" % r)
 
 
-def paired_bootstrap(a_rows, b_rows, n_boot=10000, seed=0):
-    """Paired image-level uncertainty on the accuracy difference (b - a).
+def load_rows(path):
+    """Read a per-image CSV into {row_index: (label, correct1, correct5, loss)}.
+
+    Rejects duplicate row indices rather than silently overwriting them.
+    """
+    out = {}
+    with open(path) as f:
+        f.readline()
+        for line in f:
+            q = line.strip().split(",")
+            if not q or not q[0]:
+                continue
+            i = int(q[0])
+            if i in out:
+                raise ValueError(f"duplicate row index {i} in {path}")
+            out[i] = (int(q[1]), int(q[3]), int(q[4]), float(q[5]))
+    return out
+
+
+def paired_diff(path_a, path_b, field="correct1", expect_n=None,
+                n_boot=10000, seed=0, chunk=500):
+    """Paired image-level uncertainty on (b - a).
+
+    Validates that both files cover exactly the same row IDs with the same
+    labels before pairing -- a truncated or mismatched CSV must fail loudly
+    rather than yield a plausible interval over fewer examples.
 
     Conditional on the two fitted models. Says nothing about seed variability.
     """
-    a = {r[0]: r[3] for r in a_rows}
-    b = {r[0]: r[3] for r in b_rows}
-    common = sorted(set(a) & set(b))
-    d = np.array([b[i] - a[i] for i in common], dtype=np.float64)
+    A, B = load_rows(path_a), load_rows(path_b)
+    if set(A) != set(B):
+        d = set(A) ^ set(B)
+        raise ValueError(f"row-ID sets differ between {path_a} and {path_b}: "
+                         f"{len(d)} in symmetric difference")
+    ids = sorted(A)
+    bad = [i for i in ids if A[i][0] != B[i][0]]
+    if bad:
+        raise ValueError(f"label mismatch on {len(bad)} rows, e.g. {bad[:5]}")
+    if expect_n is not None and len(ids) != expect_n:
+        raise ValueError(f"expected {expect_n} paired rows, found {len(ids)}")
+
+    col = {"correct1": 1, "correct5": 2, "loss": 3}[field]
+    scale = 100.0 if field.startswith("correct") else 1.0
+    d = np.array([B[i][col] - A[i][col] for i in ids], dtype=np.float64)
+
     rng = np.random.default_rng(seed)
-    idx = rng.integers(0, len(d), size=(n_boot, len(d)))
-    boots = d[idx].mean(axis=1) * 100.0
-    return dict(n_paired=len(d), mean_diff_pp=float(d.mean() * 100.0),
-                ci_lo=float(np.percentile(boots, 2.5)),
-                ci_hi=float(np.percentile(boots, 97.5)))
+    means = np.empty(n_boot, dtype=np.float64)
+    done, n = 0, len(d)
+    while done < n_boot:                      # bounded memory, not (n_boot x n)
+        k = min(chunk, n_boot - done)
+        means[done:done + k] = d[rng.integers(0, n, size=(k, n))].mean(axis=1)
+        done += k
+    means *= scale
+    unit = "pp" if field.startswith("correct") else "nats"
+    return dict(n_paired=n, field=field, unit=unit,
+                mean_diff=float(d.mean() * scale),
+                ci_lo=float(np.percentile(means, 2.5)),
+                ci_hi=float(np.percentile(means, 97.5)))
 
 
 # --------------------------------------------------------------------------
@@ -355,19 +405,35 @@ def load_phase1_mask():
 # Subcommand: preflight (C1-C8)
 # --------------------------------------------------------------------------
 
-def sha256_encoded_images(ds_path, limit=None):
-    """Hash the stored encoded bytes without decoding. Detects exact duplicates."""
+def hash_images(ds_path):
+    """Return (encoded_hashes, decoded_hashes) in a single pass.
+
+    The encoded hash covers the stored bytes. The decoded hash covers canonical
+    RGB dimensions plus raw pixel bytes, so it also catches the same image stored
+    under a different encoding -- the check the plan actually specified. Decoded
+    hashing strictly subsumes encoded hashing, so resolution uses the decoded one
+    and both counts are reported.
+    """
+    import io
     import datasets
+    from PIL import Image
     ds = datasets.load_from_disk(str(ds_path))
     ds = ds.cast_column("image", datasets.Image(decode=False))
-    out = []
-    n = len(ds) if limit is None else min(limit, len(ds))
+    enc, dec = [], []
+    n = len(ds)
     for i in range(n):
         b = ds[i]["image"]["bytes"]
-        out.append(hashlib.sha256(b).hexdigest())
+        enc.append(hashlib.sha256(b).hexdigest())
+        im = Image.open(io.BytesIO(b))
+        if im.mode != "RGB":
+            im = im.convert("RGB")
+        h = hashlib.sha256()
+        h.update(f"{im.size[0]}x{im.size[1]}|".encode())
+        h.update(im.tobytes())
+        dec.append(h.hexdigest())
         if (i + 1) % 20000 == 0:
             print(f"      hashed {i+1}/{n}", flush=True)
-    return out
+    return enc, dec
 
 
 def cmd_preflight(args):
@@ -409,6 +475,24 @@ def cmd_preflight(args):
     report("C3_identical_start", same_start,
            f"{len(sd_u)} tensors compared across both arms")
 
+    for arm_tag, clf_x in (("U", clf_u), ("M", clf_m)):
+        pipe_x = build_arm(arm_tag, device)
+        bn0 = {k: v.clone() for k, v in pipe_x.classifier.state_dict().items()
+               if "running_" in k or "num_batches_tracked" in k}
+        cl0 = {k: v.clone() for k, v in pipe_x.classifier.state_dict().items()
+               if "running_" not in k and "num_batches_tracked" not in k}
+        ox = build_optimizer(pipe_x, arm_tag)
+        xq = torch.randn(8, 3, 224, 224, device=device)
+        yq = torch.randint(0, 1000, (8,), device=device)
+        ox.zero_grad()
+        nn.CrossEntropyLoss()(pipe_x(xq), yq).backward()
+        ox.step()
+        sdx = pipe_x.classifier.state_dict()
+        bn_ok = all(torch.equal(bn0[k].cpu(), sdx[k].cpu()) for k in bn0)
+        cl_ok = any(not torch.equal(cl0[k].cpu(), sdx[k].cpu()) for k in cl0)
+        report(f"C5_{arm_tag}_bn_buffers_fixed", bn_ok, f"{len(bn0)} buffers unchanged after step")
+        report(f"C5_{arm_tag}_classifier_updates", cl_ok, "classifier parameters changed after step")
+
     pipe_m = freeze_bn_eval(FreqPipeline(clf_m, SymmetricBoundedMask()).to(device))
     for p in pipe_m.classifier.parameters():
         p.requires_grad_(True)
@@ -444,42 +528,65 @@ def cmd_preflight(args):
     print("== C6 matched augmentation streams ==")
     ds, tr_idx, va_idx = load_pool_split(PATHS["pool_100k"], CFG["train_frac"], CFG["split_seed"])
     train_tf, eval_tf = build_transforms()
-    probe = sorted(tr_idx)[:16]
-    a = SeededSubset(ds, probe, train_tf, augment=True, seed=CFG["run_seed"])
-    b = SeededSubset(ds, probe, train_tf, augment=True, seed=CFG["run_seed"])
-    a.set_epoch(3); b.set_epoch(3)
-    ha = hashlib.sha256(b"".join(a[i][0].numpy().tobytes() for i in range(16))).hexdigest()
-    hb = hashlib.sha256(b"".join(b[i][0].numpy().tobytes() for i in range(16))).hexdigest()
-    a.set_epoch(4)
-    hc = hashlib.sha256(b"".join(a[i][0].numpy().tobytes() for i in range(16))).hexdigest()
-    report("C6_streams_match", ha == hb, f"epoch-3 input hash identical across arms ({ha[:16]}…)")
-    report("C6_epoch_varies", ha != hc, "epoch 3 and epoch 4 give different augmentations")
+    probe = sorted(tr_idx)[:64]
 
-    print("== C7 content-hash disjointness and duplicate resolution ==")
+    def loader_batch_hash(epoch, workers):
+        """Hash the first batch as it actually arrives through the DataLoader.
+
+        Going through the real loader with real workers is the point: a
+        parent-side set_epoch() that never reaches worker processes would pass
+        a direct-indexing check and fail here.
+        """
+        sub = SeededSubset(ds, probe, train_tf, augment=True, seed=CFG["run_seed"])
+        sub.set_epoch(epoch)
+        dl = make_loader(sub, 16, False, CFG["run_seed"], workers)
+        xb, yb, ib = next(iter(dl))
+        return (hashlib.sha256(xb.numpy().tobytes()).hexdigest(), ib.tolist())
+
+    w = max(2, args.workers)
+    h3a, id3a = loader_batch_hash(3, w)
+    h3b, id3b = loader_batch_hash(3, w)
+    h4a, id4a = loader_batch_hash(4, w)
+    report("C6_streams_match", h3a == h3b and id3a == id3b,
+           f"epoch-3 batch identical across two independent loaders, {w} workers ({h3a[:16]}…)")
+    report("C6_epoch_varies", h3a != h4a,
+           "epoch 3 and epoch 4 give different augmentations through the loader")
+    report("C6_ids_stable", id3a == id4a,
+           "sample IDs unchanged across epochs; only augmentation differs")
+
+    print("== C7 content disjointness and duplicate resolution ==")
     if args.skip_hash:
-        report("C7_disjoint", False, "SKIPPED via --skip-hash (required before training)")
+        report("C7_disjoint_after_resolution", False,
+               "SKIPPED via --skip-hash (required before training)")
     else:
         t0 = time.time()
-        print("   hashing 100k pool…", flush=True)
-        h100 = sha256_encoded_images(PATHS["pool_100k"])
-        print("   hashing 25k eval set…", flush=True)
-        h25 = sha256_encoded_images(PATHS["eval_25k"])
+        print("   hashing 100k pool (encoded + decoded)…", flush=True)
+        e100, d100 = hash_images(PATHS["pool_100k"])
+        print("   hashing 25k eval set (encoded + decoded)…", flush=True)
+        e25, d25 = hash_images(PATHS["eval_25k"])
 
+        def counts(h100, h25):
+            tr_h = {h100[i] for i in tr_idx}
+            va_h = {h100[i] for i in va_idx}
+            ev_h = set(h25)
+            return dict(train_eval=len(tr_h & ev_h), dev_eval=len(va_h & ev_h),
+                        train_dev=len(tr_h & va_h),
+                        dups_100k=len(h100) - len(set(h100)),
+                        dups_25k=len(h25) - len(set(h25)))
+
+        raw_enc, raw_dec = counts(e100, e25), counts(d100, d25)
+        report("C7_raw_overlap_encoded", True,
+               f"stored-bytes hash — train∩eval={raw_enc['train_eval']}, "
+               f"dev∩eval={raw_enc['dev_eval']}, train∩dev={raw_enc['train_dev']}, "
+               f"dups 100k={raw_enc['dups_100k']}, 25k={raw_enc['dups_25k']}", gate=False)
+        report("C7_raw_overlap_decoded", True,
+               f"decoded RGB pixel hash — train∩eval={raw_dec['train_eval']}, "
+               f"dev∩eval={raw_dec['dev_eval']}, train∩dev={raw_dec['train_dev']}, "
+               f"dups 100k={raw_dec['dups_100k']}, 25k={raw_dec['dups_25k']}", gate=False)
+
+        # Resolution uses the decoded hash, which subsumes the encoded one.
+        h100, h25 = d100, d25
         tr_h = {h100[i] for i in tr_idx}
-        va_h = {h100[i] for i in va_idx}
-        ev_h = set(h25)
-        raw = dict(train_eval=len(tr_h & ev_h), dev_eval=len(va_h & ev_h),
-                   train_dev=len(tr_h & va_h),
-                   dups_100k=len(h100) - len(set(h100)),
-                   dups_25k=len(h25) - len(set(h25)))
-        report("C7_raw_overlap", True,
-               f"BEFORE resolution — train∩eval={raw['train_eval']}, dev∩eval={raw['dev_eval']}, "
-               f"train∩dev={raw['train_dev']}, internal dups: 100k={raw['dups_100k']}, "
-               f"25k={raw['dups_25k']}  (ILSVRC-2012 contains cross-split duplicates)",
-               gate=False)
-
-        # Resolution, per the reviewer's requirement to fix crossings before training.
-        # Training pool is left intact so it still matches the historical 80k.
         train_clean = list(tr_idx)
         dev_clean = [i for i in va_idx if h100[i] not in tr_h]
         dev_h = {h100[i] for i in dev_clean}
@@ -494,25 +601,60 @@ def cmd_preflight(args):
         tr_h2 = {h100[i] for i in train_clean}
         dv_h2 = {h100[i] for i in dev_clean}
         ev_h2 = {h25[i] for i in eval_clean}
-        ok7 = (len(tr_h2 & ev_h2) == 0 and len(dv_h2 & ev_h2) == 0
-               and len(tr_h2 & dv_h2) == 0 and len(ev_h2) == len(eval_clean))
+        ok7 = (not (tr_h2 & ev_h2) and not (dv_h2 & ev_h2) and not (tr_h2 & dv_h2)
+               and len(ev_h2) == len(eval_clean))
         report("C7_disjoint_after_resolution", ok7,
                f"train={len(train_clean)} dev={len(dev_clean)} eval={len(eval_clean)} "
                f"(dropped {len(va_idx)-len(dev_clean)} dev, {len(h25)-len(eval_clean)} eval); "
-               f"all pairwise intersections now 0  [{time.time()-t0:.0f}s]")
+               f"all pairwise intersections 0 on decoded content  [{time.time()-t0:.0f}s]")
+        # Training-set internal duplicates are left in place deliberately: they are
+        # not leakage, and removing them would change the historical 80,000 pool.
+        report("C7_train_internal_dups", True,
+               f"{len(train_clean)-len(tr_h2)} duplicate images remain inside train "
+               f"(not leakage; pool kept at the historical size)", gate=False)
 
         manifest = dict(
-            created="preflight",
+            created="preflight", hash_basis="decoded_rgb_pixels",
             pool_100k=str(PATHS["pool_100k"]), eval_25k=str(PATHS["eval_25k"]),
             split_seed=CFG["split_seed"], train_frac=CFG["train_frac"],
-            raw_overlap=raw,
+            raw_overlap_encoded=raw_enc, raw_overlap_decoded=raw_dec,
             train=train_clean, dev=dev_clean, eval=eval_clean,
             n_train=len(train_clean), n_dev=len(dev_clean), n_eval=len(eval_clean),
-            fingerprint_100k=hashlib.sha256("".join(h100).encode()).hexdigest(),
-            fingerprint_25k=hashlib.sha256("".join(h25).encode()).hexdigest(),
+            fingerprint_100k=hashlib.sha256("".join(d100).encode()).hexdigest(),
+            fingerprint_25k=hashlib.sha256("".join(d25).encode()).hexdigest(),
+            torch=torch.__version__,
+            transforms="RandomResizedCrop(224,(0.8,1.0))+RandomHorizontalFlip / Resize(224)",
         )
+        manifest["manifest_id"] = hashlib.sha256(
+            json.dumps({k: manifest[k] for k in sorted(manifest)}, sort_keys=True,
+                       default=str).encode()).hexdigest()
         json.dump(manifest, open(outdir / "manifest.json", "w"))
-        print(f"   manifest written to {outdir/'manifest.json'}")
+        print(f"   manifest written to {outdir/'manifest.json'}  id={manifest['manifest_id'][:16]}…")
+
+    print("== C8 checkpoint round-trip for the new writer ==")
+    pc = build_arm("M", device)
+    with torch.no_grad():
+        pc.freq_mask.mask_weights.normal_(0, 0.3)   # non-trivial state to round-trip
+    xq = torch.randn(4, 3, 224, 224, device=device)
+    with torch.no_grad():
+        y1 = pc(xq)
+    tmp = outdir / "_c8_roundtrip.pt"
+    torch.save({"pipeline_state_dict": pc.state_dict()}, tmp)
+    pr = build_arm("M", device)
+    pr.load_state_dict(torch.load(tmp, map_location=device, weights_only=False)["pipeline_state_dict"])
+    pr.to(device)
+    freeze_bn_eval(pr)
+    with torch.no_grad():
+        y2 = pr(xq)
+    sd1, sd2 = pc.state_dict(), pr.state_dict()
+    tensors_equal = all(torch.equal(sd1[k].cpu(), sd2[k].cpu()) for k in sd1)
+    logits_equal = bool(torch.equal(y1, y2))
+    preds_equal = bool(torch.equal(y1.argmax(1), y2.argmax(1)))
+    tmp.unlink()
+    report("C8_state_roundtrip", tensors_equal,
+           f"{len(sd1)} tensors identical after save/reload (buffers and mask included)")
+    report("C8_prediction_roundtrip", logits_equal and preds_equal,
+           f"logits bit-identical after reload; max|Δ|={float((y1-y2).abs().max()):.3e}")
 
     ok = all(v["pass_"] for v in results.values())
     json.dump(results, open(outdir / "preflight.json", "w"), indent=2, default=str)
@@ -627,17 +769,27 @@ def cmd_eval_historical(args):
         print(f"  {tag:28s} top1={stats['top1']:6.3f}% top5={stats['top5']:6.3f}% "
               f"loss={stats['loss']:.4f} n={stats['n']} [{dt:.0f}s]", flush=True)
 
-    # Within-classifier mask-on vs identity, paired over images.
+    # Within-classifier mask-on vs identity, paired over images, plus the
+    # Phase 1 reconstruction against the same pristine classifier (B4 vs B1),
+    # and the Phase 3.2 pipeline against the pristine reference (B2 vs B1).
+    n_exp = len(man["eval"])
     pairs = {}
-    for tag in ("B2_phase3_2", "B3_v5"):
-        a = list(open(outdir / f"{tag}_identity.csv"))[1:]
-        b = list(open(outdir / f"{tag}_mask.csv"))[1:]
-        pa = [tuple(map(float, r.strip().split(","))) for r in a]
-        pb = [tuple(map(float, r.strip().split(","))) for r in b]
-        pa = [(int(r[0]), 0, 0, int(r[3])) for r in pa]
-        pb = [(int(r[0]), 0, 0, int(r[3])) for r in pb]
-        pairs[f"{tag}_mask_minus_identity"] = paired_bootstrap(pa, pb, seed=CFG["run_seed"])
-        print(f"  {tag} mask - identity: {pairs[f'{tag}_mask_minus_identity']}", flush=True)
+    comparisons = [
+        ("B2_phase3_2_mask_minus_identity", "B2_phase3_2_identity", "B2_phase3_2_mask"),
+        ("B3_v5_mask_minus_identity", "B3_v5_identity", "B3_v5_mask"),
+        ("B4_phase1mask_minus_identity", "B1_pristine_identity", "B4_pristine_phase1mask"),
+        ("B2_phase3_2_minus_pristine", "B1_pristine_identity", "B2_phase3_2_mask"),
+        ("B3_v5_minus_pristine", "B1_pristine_identity", "B3_v5_mask"),
+    ]
+    for tag, a, b in comparisons:
+        pairs[tag] = {}
+        for field in ("correct1", "correct5", "loss"):
+            pairs[tag][field] = paired_diff(outdir / f"{a}.csv", outdir / f"{b}.csv",
+                                            field=field, expect_n=n_exp,
+                                            seed=CFG["run_seed"])
+        t = pairs[tag]["correct1"]
+        print(f"  {tag:38s} top-1 {t['mean_diff']:+7.3f} pp "
+              f"[{t['ci_lo']:+.3f}, {t['ci_hi']:+.3f}]  n={t['n_paired']}", flush=True)
 
     json.dump(dict(conditions=results, paired=pairs), open(outdir / "summary.json", "w"), indent=2)
     print(f"\nwritten -> {outdir/'summary.json'}")
@@ -667,25 +819,38 @@ def build_optimizer(pipe, arm):
     return optim.Adam(groups)
 
 
-def train_one_epoch(pipe, loader, opt, device, epoch, amp, log_every=50):
+class NumericalFailure(RuntimeError):
+    """Raised at the point a non-finite loss or gradient occurs."""
+
+
+def train_one_epoch(pipe, loader, opt, scaler, device, epoch, amp, arm, outdir,
+                    log_every=50):
     crit = nn.CrossEntropyLoss()
     pipe.classifier.eval()              # BN buffers stay frozen
     if pipe.freq_mask is not None:
         pipe.freq_mask.train()
-    scaler = torch.amp.GradScaler("cuda", enabled=amp)
-    tot, c1, loss_sum, t0 = 0, 0, 0.0, time.time()
+    skipped, tot, c1, loss_sum, t0 = 0, 0, 0, 0.0, time.time()
     for i, (x, y, _) in enumerate(loader):
         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
         opt.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=amp):
             out = pipe(x)
             loss = crit(out, y)
+        if not torch.isfinite(loss):
+            _fail(outdir, arm, epoch, i, f"non-finite loss: {float(loss)}")
         scaler.scale(loss).backward()
         scaler.unscale_(opt)
         for grp in opt.param_groups:
+            for prm in grp["params"]:
+                if prm.grad is not None and not torch.isfinite(prm.grad).all():
+                    if not amp:
+                        _fail(outdir, arm, epoch, i, "non-finite gradient (fp32)")
             torch.nn.utils.clip_grad_norm_(grp["params"], CFG["grad_clip"])
+        before = scaler.get_scale() if amp else None
         scaler.step(opt)
         scaler.update()
+        if amp and scaler.get_scale() < before:
+            skipped += 1               # AMP skipped this update; counted, not hidden
         tot += y.numel()
         c1 += int((out.float().argmax(1) == y).sum())
         loss_sum += float(loss) * y.numel()
@@ -693,7 +858,17 @@ def train_one_epoch(pipe, loader, opt, device, epoch, amp, log_every=50):
             print(f"    ep{epoch} step {i}/{len(loader)} loss={float(loss):.4f} "
                   f"top1={100.0*c1/tot:.2f}% {tot/(time.time()-t0):.1f} img/s", flush=True)
     return dict(train_loss=loss_sum / tot, train_top1=100.0 * c1 / tot,
-                n=tot, seconds=time.time() - t0)
+                n=tot, seconds=time.time() - t0, skipped_updates=skipped,
+                steps=len(loader))
+
+
+def _fail(outdir, arm, epoch, batch, msg):
+    """Durable failure record, then stop. Never produce a normal endpoint."""
+    rec = dict(arm=arm, epoch=epoch, batch=batch, message=msg,
+               time=time.strftime("%Y-%m-%dT%H:%M:%S"))
+    Path(outdir).mkdir(parents=True, exist_ok=True)
+    json.dump(rec, open(Path(outdir) / "FAILURE.json", "w"), indent=2)
+    raise NumericalFailure(f"[{arm}] epoch {epoch} batch {batch}: {msg}")
 
 
 def cmd_pilot(args):
@@ -717,23 +892,29 @@ def cmd_pilot(args):
     crit = nn.CrossEntropyLoss()
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp)
 
-    n_seen, t0, warmup = 0, None, 5
+    n_seen, t0, warmup, measured = 0, None, 5, 0
     for i, (x, y, _) in enumerate(loader):
         if i == warmup:
+            if device.type == "cuda":
+                torch.cuda.synchronize()      # drain warmup before the clock starts
             t0 = time.time(); n_seen = 0
         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
         opt.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=args.amp):
             loss = crit(pipe(x), y)
+        if not torch.isfinite(loss):
+            raise RuntimeError(f"pilot: non-finite loss at step {i}")
         scaler.scale(loss).backward()
         scaler.unscale_(opt)
         for grp in opt.param_groups:
             torch.nn.utils.clip_grad_norm_(grp["params"], CFG["grad_clip"])
         scaler.step(opt); scaler.update()
         if i >= warmup:
-            n_seen += y.numel()
-        if i >= warmup + args.steps:
+            n_seen += y.numel(); measured += 1
+        if measured >= args.steps:            # exactly args.steps, not one more
             break
+    if device.type == "cuda":
+        torch.cuda.synchronize()              # all queued work done before reading
 
     dt = time.time() - t0
     ips = n_seen / dt
@@ -748,7 +929,9 @@ def cmd_pilot(args):
         "amp": args.amp,
         "batch_size": CFG["batch_size"],
         "workers": args.workers,
-        "measured_steps": args.steps,
+        "measured_steps": measured,
+        "measured_images": n_seen,
+        "measured_seconds": dt,
     }
     for budget_h in (2, 4, 8):
         est[f"epochs_in_{budget_h}h_one_arm"] = int(budget_h * 3600 / epoch_s)
@@ -765,6 +948,17 @@ def cmd_train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     arm = args.arm
     outdir = PATHS["out"] / f"arm_{arm}"
+    if (outdir / "final.pt").exists() and not args.restart:
+        raise SystemExit(
+            f"{outdir} already holds a completed run. Counted runs are not overwritten. "
+            "Pass --restart only for a documented, intentional restart.")
+    pf = PATHS["out"] / "preflight" / "preflight.json"
+    if not pf.exists():
+        raise SystemExit(f"No preflight record at {pf}. Run `preflight` first.")
+    checks = json.load(open(pf))
+    failed = [k for k, v in checks.items() if v.get("gating", True) and not v.get("pass_")]
+    if failed:
+        raise SystemExit(f"Preflight has failing gating checks: {failed}. Not launching.")
     outdir.mkdir(parents=True, exist_ok=True)
     CFG["amp"] = args.amp
     CFG["epochs"] = args.epochs
@@ -788,12 +982,14 @@ def cmd_train(args):
     torch.manual_seed(CFG["run_seed"])
     pipe = build_arm(arm, device)
     opt = build_optimizer(pipe, arm)
+    scaler = torch.amp.GradScaler("cuda", enabled=args.amp)   # one per run, not per epoch
     torch.save({"pipeline_state_dict": pipe.state_dict()}, outdir / "initial.pt")
 
     history, best = [], (-1.0, -1)
     for ep in range(1, args.epochs + 1):
         tr.set_epoch(ep)
-        stats = train_one_epoch(pipe, tr_loader, opt, device, ep, args.amp)
+        stats = train_one_epoch(pipe, tr_loader, opt, scaler, device, ep,
+                                args.amp, arm, outdir)
         dev_stats, _ = evaluate(pipe, dv_loader, device, use_mask=True, amp=args.amp)
         rec = dict(epoch=ep, **stats, dev_top1=dev_stats["top1"], dev_top5=dev_stats["top5"],
                    dev_loss=dev_stats["loss"], dev_n=dev_stats["n"])
@@ -810,9 +1006,10 @@ def cmd_train(args):
         if dev_stats["top1"] > best[0]:
             best = (dev_stats["top1"], ep)
             torch.save({"pipeline_state_dict": pipe.state_dict(), "epoch": ep,
-                        "dev_top1": dev_stats["top1"]}, outdir / "best_dev.pt")
+                        "dev_top1": dev_stats["top1"], "config": CFG},
+                       outdir / "best_dev.pt")
     torch.save({"pipeline_state_dict": pipe.state_dict(), "epoch": args.epochs,
-                "dev_top1": history[-1]["dev_top1"]}, outdir / "final.pt")
+                "dev_top1": history[-1]["dev_top1"], "config": CFG}, outdir / "final.pt")
     print(f"[{arm}] done. final epoch {args.epochs}; best dev {best[0]:.2f}% at epoch {best[1]}")
     print("Primary endpoint is final.pt, fixed in advance. best_dev.pt is secondary.")
     return 0
@@ -850,13 +1047,17 @@ def cmd_eval_pair(args):
             store["M_identity"] = r_id
             print(f"  M with mask removed: top1={s_id['top1']:.3f}%")
 
-    out = dict(conditions=results,
-               M_minus_U=paired_bootstrap(store["U"], store["M"], seed=CFG["run_seed"]),
-               M_minus_M_identity=paired_bootstrap(store["M_identity"], store["M"], seed=CFG["run_seed"]))
+    n_exp = len(man["eval"])
+    out = dict(conditions=results, paired={})
+    for tag, a, b in (("M_minus_U", f"U_{args.endpoint}", f"M_{args.endpoint}"),
+                      ("M_minus_M_identity", f"M_identity_{args.endpoint}", f"M_{args.endpoint}")):
+        out["paired"][tag] = {f: paired_diff(outdir / f"{a}.csv", outdir / f"{b}.csv",
+                                             field=f, expect_n=n_exp, seed=CFG["run_seed"])
+                              for f in ("correct1", "correct5", "loss")}
     out["scope"] = ("Single seed. Paired image-level uncertainty is conditional on these two "
                     "fitted models and does not estimate training-seed variability.")
     json.dump(out, open(outdir / "summary.json", "w"), indent=2)
-    print(json.dumps(out["M_minus_U"], indent=2))
+    print(json.dumps(out["paired"]["M_minus_U"], indent=2))
     print(f"written -> {outdir/'summary.json'}")
     return 0
 
@@ -888,6 +1089,8 @@ def main():
     p.add_argument("--arm", choices=["U", "M"], required=True)
     p.add_argument("--epochs", type=int, required=True)
     p.add_argument("--amp", action="store_true")
+    p.add_argument("--restart", action="store_true",
+                   help="allow overwriting a completed counted run (documented restarts only)")
     p.add_argument("--workers", type=int, default=8); p.set_defaults(fn=cmd_train)
 
     p = sub.add_parser("eval-pair")
