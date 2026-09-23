@@ -1,0 +1,128 @@
+{
+  "checks": {
+    "C1_identity_fft": {
+      "pass_": true,
+      "detail": "max|IFFT(FFT(x))-x| = 2.623e-06",
+      "gating": true
+    },
+    "C2_mask_symmetry": {
+      "pass_": true,
+      "detail": "|m(w=0)-1|max = 0.000e+00; |m(k)-m(-k)|max = 0.000e+00",
+      "gating": true
+    },
+    "C3_identical_start": {
+      "pass_": true,
+      "detail": "122 tensors compared across both arms",
+      "gating": true
+    },
+    "C5_U_bn_buffers_fixed": {
+      "pass_": true,
+      "detail": "60 buffers unchanged after step",
+      "gating": true
+    },
+    "C5_U_classifier_updates": {
+      "pass_": true,
+      "detail": "classifier parameters changed after step",
+      "gating": true
+    },
+    "C5_M_bn_buffers_fixed": {
+      "pass_": true,
+      "detail": "60 buffers unchanged after step",
+      "gating": true
+    },
+    "C5_M_classifier_updates": {
+      "pass_": true,
+      "detail": "classifier parameters changed after step",
+      "gating": true
+    },
+    "C4_mask_gradients": {
+      "pass_": true,
+      "detail": "finite=True, sum|g|=1.777e+01",
+      "gating": true
+    },
+    "C6_streams_match": {
+      "pass_": true,
+      "detail": "epoch-3 batch identical across two independent loaders, 8 workers (a5590dce36329685\u2026)",
+      "gating": true
+    },
+    "C6_loader_reuse_epoch_varies": {
+      "pass_": true,
+      "detail": "same loader object, epoch 3 -> 4 changes the batch (a5590dce3632\u2026 -> 9b0593aef3ff\u2026)",
+      "gating": true
+    },
+    "C6_ids_stable": {
+      "pass_": true,
+      "detail": "sample IDs unchanged across epochs; only augmentation differs",
+      "gating": true
+    },
+    "C6_reuse_matches_fresh": {
+      "pass_": true,
+      "detail": "reused loader at epoch 3 matches a freshly built one",
+      "gating": true
+    },
+    "C7_raw_overlap_encoded": {
+      "pass_": true,
+      "detail": "stored-bytes hash \u2014 train\u2229eval=25, dev\u2229eval=7, train\u2229dev=9, dups 100k=33, 25k=6",
+      "gating": false
+    },
+    "C7_raw_overlap_decoded": {
+      "pass_": true,
+      "detail": "decoded RGB pixel hash \u2014 train\u2229eval=25, dev\u2229eval=7, train\u2229dev=9, dups 100k=33, 25k=6",
+      "gating": false
+    },
+    "C7_disjoint_after_resolution": {
+      "pass_": true,
+      "detail": "train=80000 dev=19991 eval=24962 (dropped 9 dev, 38 eval); all pairwise intersections 0 on decoded content  [470s]",
+      "gating": true
+    },
+    "C7_train_internal_dups": {
+      "pass_": true,
+      "detail": "22 duplicate images remain inside train (not leakage; pool kept at the historical size)",
+      "gating": false
+    },
+    "C8_U_state_roundtrip": {
+      "pass_": true,
+      "detail": "122 tensors identical after save/reload (buffers and mask included)",
+      "gating": true
+    },
+    "C8_U_prediction_roundtrip": {
+      "pass_": true,
+      "detail": "logits bit-identical after reload; max|\u0394|=0.000e+00",
+      "gating": true
+    },
+    "C8_M_state_roundtrip": {
+      "pass_": true,
+      "detail": "123 tensors identical after save/reload (buffers and mask included)",
+      "gating": true
+    },
+    "C8_M_prediction_roundtrip": {
+      "pass_": true,
+      "detail": "logits bit-identical after reload; max|\u0394|=0.000e+00",
+      "gating": true
+    }
+  },
+  "required": [
+    "C1_identity_fft",
+    "C2_mask_symmetry",
+    "C3_identical_start",
+    "C4_mask_gradients",
+    "C5_U_bn_buffers_fixed",
+    "C5_U_classifier_updates",
+    "C5_M_bn_buffers_fixed",
+    "C5_M_classifier_updates",
+    "C6_streams_match",
+    "C6_loader_reuse_epoch_varies",
+    "C6_ids_stable",
+    "C6_reuse_matches_fresh",
+    "C7_disjoint_after_resolution",
+    "C8_U_state_roundtrip",
+    "C8_U_prediction_roundtrip",
+    "C8_M_state_roundtrip",
+    "C8_M_prediction_roundtrip"
+  ],
+  "missing": [],
+  "all_passed": true,
+  "torch": "2.10.0+cu128",
+  "time": "2026-09-23T13:59:17",
+  "manifest_id": "5ec2e0946660a7865c19b511d948b6965d79c23ddc552093cfab813c3506bc52"
+}

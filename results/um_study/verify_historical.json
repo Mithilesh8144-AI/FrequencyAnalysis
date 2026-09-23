@@ -1,0 +1,24 @@
+{
+  "p32": {
+    "state_keys": 123,
+    "bn_buffers": 40,
+    "forward_finite": true,
+    "recorded_score": 75.385,
+    "mask_mean": 0.9999999403953552,
+    "mask_std": 0.8293217420578003,
+    "export_match": "/home/bab61wot/VIT/SIM2REAL_CLUSTER/cluster_export/sim2real/resnet18_phase3.2/RAWMASK_best_model.npy",
+    "reproduced_top1": 75.39,
+    "reproduction_delta": 0.0049999999999954525,
+    "reproduction_n": 20000,
+    "reproduction_seconds": 16.677932739257812
+  },
+  "v5": {
+    "state_keys": 123,
+    "bn_buffers": 40,
+    "forward_finite": true,
+    "recorded_score": 61.27077458450831,
+    "mask_mean": 0.9999343752861023,
+    "mask_std": 0.004910164512693882,
+    "export_match": "/home/bab61wot/VIT/SIM2REAL_CLUSTER/cluster_export/cluster/resnet18_phase2/RAWMASK_best_model.npy"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "image_size": 224,
+  "batch_size": 64,
+  "classifier_lr": 1e-05,
+  "mask_lr": 0.001,
+  "classifier_wd": 0.0001,
+  "mask_wd": 0.0,
+  "grad_clip": 1.0,
+  "optimizer": "adam",
+  "schedule": "constant",
+  "split_seed": 42,
+  "run_seed": 0,
+  "train_frac": 0.8,
+  "amp": false,
+  "epochs": 15,
+  "arm": "M",
+  "n_train": 80000,
+  "n_dev": 19991,
+  "manifest_fingerprint_100k": "d74dbcb01e6354bf4b8928fa2beef6dede65645782b70e6c971726cb174e94ac",
+  "manifest_fingerprint_25k": "81379a861f8af9d775284023e23746c21e279f4a7369569700ff4954013a6000",
+  "manifest_id": "5ec2e0946660a7865c19b511d948b6965d79c23ddc552093cfab813c3506bc52",
+  "preflight_time": "2026-09-23T13:59:17",
+  "raw_overlap_decoded": {
+    "train_eval": 25,
+    "dev_eval": 7,
+    "train_dev": 9,
+    "dups_100k": 33,
+    "dups_25k": 6
+  },
+  "raw_overlap_encoded": {
+    "train_eval": 25,
+    "dev_eval": 7,
+    "train_dev": 9,
+    "dups_100k": 33,
+    "dups_25k": 6
+  },
+  "skipped_updates_total": 0
+}

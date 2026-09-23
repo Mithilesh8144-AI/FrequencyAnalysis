@@ -1,0 +1,83 @@
+{
+  "conditions": {
+    "U": {
+      "n": 24962,
+      "top1": 64.3097508212483,
+      "top5": 85.68624308949603,
+      "loss": 2.003637765821133,
+      "correct1": 16053,
+      "correct5": 21389
+    },
+    "M": {
+      "n": 24962,
+      "top1": 64.21360467911225,
+      "top5": 85.61813957214967,
+      "loss": 2.0038309581148717,
+      "correct1": 16029,
+      "correct5": 21372
+    },
+    "M_identity": {
+      "n": 24962,
+      "top1": 64.0413428411185,
+      "top5": 85.61012739363834,
+      "loss": 2.0055666279395306,
+      "correct1": 15986,
+      "correct5": 21370
+    }
+  },
+  "paired": {
+    "M_minus_U": {
+      "correct1": {
+        "n_paired": 24962,
+        "field": "correct1",
+        "unit": "pp",
+        "mean_diff": -0.09614614213604679,
+        "ci_lo": -0.2764201586411345,
+        "ci_hi": 0.08012178511337233
+      },
+      "correct5": {
+        "n_paired": 24962,
+        "field": "correct5",
+        "unit": "pp",
+        "mean_diff": -0.06810351734636648,
+        "ci_lo": -0.20030446278343084,
+        "ci_hi": 0.06810351734636648
+      },
+      "loss": {
+        "n_paired": 24962,
+        "field": "loss",
+        "unit": "nats",
+        "mean_diff": 0.00019318367919237247,
+        "ci_lo": -0.0034273148475683067,
+        "ci_hi": 0.003839949037537056
+      }
+    },
+    "M_minus_M_identity": {
+      "correct1": {
+        "n_paired": 24962,
+        "field": "correct1",
+        "unit": "pp",
+        "mean_diff": 0.1722618379937505,
+        "ci_lo": 0.024036535534011697,
+        "ci_hi": 0.3244932297091579
+      },
+      "correct5": {
+        "n_paired": 24962,
+        "field": "correct5",
+        "unit": "pp",
+        "mean_diff": 0.008012178511337233,
+        "ci_lo": -0.09614614213604679,
+        "ci_hi": 0.11617658841438987
+      },
+      "loss": {
+        "n_paired": 24962,
+        "field": "loss",
+        "unit": "nats",
+        "mean_diff": -0.0017356735437865554,
+        "ci_lo": -0.004291147716529125,
+        "ci_hi": 0.0008277368239724388
+      }
+    }
+  },
+  "scope": "Single seed. Paired image-level uncertainty is conditional on these two fitted models and does not estimate training-seed variability."
+}

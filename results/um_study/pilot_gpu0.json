@@ -1,0 +1,23 @@
+{
+  "images_per_second": 1102.671181672137,
+  "seconds_per_train_epoch": 72.55109349886575,
+  "minutes_per_train_epoch": 1.2091848916477625,
+  "train_images": 80000,
+  "peak_gpu_gib": 1.7045369148254395,
+  "amp": false,
+  "batch_size": 64,
+  "workers": 8,
+  "measured_steps": 600,
+  "measured_images": 38400,
+  "measured_seconds": 34.824524879455566,
+  "epochs_in_2h_one_arm": 99,
+  "epochs_in_4h_one_arm": 198,
+  "epochs_in_8h_one_arm": 396,
+  "dev_images": 19991,
+  "dev_eval_seconds": 16.572115659713745,
+  "checkpoint_write_seconds": 0.5747678279876709,
+  "seconds_per_epoch_total": 90.27274481455484,
+  "minutes_per_epoch_total": 1.5045457469092474,
+  "declared_epochs": 15,
+  "estimated_run_minutes_one_arm": 22.56818620363871
+}
