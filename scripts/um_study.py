@@ -216,6 +216,21 @@ def manifest_path():
     return PATHS["out"] / "preflight" / "manifest.json"
 
 
+REQUIRED_CHECKS = (
+    "C1_identity_fft", "C2_mask_symmetry", "C3_identical_start", "C4_mask_gradients",
+    "C5_U_bn_buffers_fixed", "C5_U_classifier_updates",
+    "C5_M_bn_buffers_fixed", "C5_M_classifier_updates",
+    "C6_streams_match", "C6_loader_reuse_epoch_varies", "C6_ids_stable",
+    "C6_reuse_matches_fresh",
+    "C7_disjoint_after_resolution",
+    "C8_U_state_roundtrip", "C8_U_prediction_roundtrip",
+    "C8_M_state_roundtrip", "C8_M_prediction_roundtrip",
+)
+
+MANIFEST_REQUIRED_FIELDS = ("hash_basis", "raw_overlap_encoded", "raw_overlap_decoded",
+                            "manifest_id", "train", "dev", "eval")
+
+
 def load_manifest(required=True):
     p = manifest_path()
     if not p.exists():
@@ -225,8 +240,19 @@ def load_manifest(required=True):
                 "the cleaned, duplicate-resolved partitions are defined there.")
         return None
     m = json.load(open(p))
-    print(f"  manifest: train={m['n_train']} dev={m['n_dev']} eval={m['n_eval']} "
-          f"(raw overlaps before resolution: {m['raw_overlap']})")
+    missing = [k for k in MANIFEST_REQUIRED_FIELDS if k not in m]
+    if missing:
+        raise SystemExit(
+            f"Manifest at {p} is missing {missing}. It predates the decoded-content "
+            "check; re-run `preflight` to regenerate it. Old byte-only manifests are "
+            "not accepted.")
+    if m["hash_basis"] != "decoded_rgb_pixels":
+        raise SystemExit(f"Manifest hash_basis is {m['hash_basis']!r}, expected "
+                         "'decoded_rgb_pixels'. Re-run `preflight`.")
+    print(f"  manifest {m['manifest_id'][:16]}… train={m['n_train']} dev={m['n_dev']} "
+          f"eval={m['n_eval']}")
+    print(f"  overlaps before resolution — decoded: {m['raw_overlap_decoded']}")
+    print(f"                               encoded: {m['raw_overlap_encoded']}")
     return m
 
 
@@ -279,7 +305,11 @@ def evaluate(pipeline, loader, device, use_mask=True, amp=False):
         with torch.amp.autocast("cuda", enabled=amp):
             out = pipeline(x, use_mask=use_mask)
         out = out.float()
+        if not torch.isfinite(out).all():
+            raise RuntimeError("non-finite logits during evaluation")
         losses = crit(out, y)
+        if not torch.isfinite(losses).all():
+            raise RuntimeError("non-finite per-example loss during evaluation")
         top5 = out.topk(5, dim=1).indices
         hit1 = (top5[:, 0] == y)
         hit5 = (top5 == y.unsqueeze(1)).any(dim=1)
@@ -493,37 +523,16 @@ def cmd_preflight(args):
         report(f"C5_{arm_tag}_bn_buffers_fixed", bn_ok, f"{len(bn0)} buffers unchanged after step")
         report(f"C5_{arm_tag}_classifier_updates", cl_ok, "classifier parameters changed after step")
 
-    pipe_m = freeze_bn_eval(FreqPipeline(clf_m, SymmetricBoundedMask()).to(device))
-    for p in pipe_m.classifier.parameters():
-        p.requires_grad_(True)
-    bn_before = {k: v.clone() for k, v in pipe_m.classifier.state_dict().items()
-                 if "running_" in k or "num_batches_tracked" in k}
-    clf_before = {k: v.clone() for k, v in pipe_m.classifier.state_dict().items()
-                  if "running_" not in k and "num_batches_tracked" not in k}
-
+    pipe_m = build_arm("M", device)
     xb = torch.randn(8, 3, 224, 224, device=device)
     yb = torch.randint(0, 1000, (8,), device=device)
-    opt = optim.Adam([
-        {"params": pipe_m.freq_mask.parameters(), "lr": CFG["mask_lr"], "weight_decay": CFG["mask_wd"]},
-        {"params": pipe_m.classifier.parameters(), "lr": CFG["classifier_lr"], "weight_decay": CFG["classifier_wd"]},
-    ])
+    opt = build_optimizer(pipe_m, "M")
     opt.zero_grad()
-    loss = nn.CrossEntropyLoss()(pipe_m(xb), yb)
-    loss.backward()
+    nn.CrossEntropyLoss()(pipe_m(xb), yb).backward()
     g = pipe_m.freq_mask.mask_weights.grad
     g_ok = g is not None and bool(torch.isfinite(g).all()) and float(g.abs().sum()) > 0
     report("C4_mask_gradients", g_ok,
            f"finite={bool(torch.isfinite(g).all())}, sum|g|={float(g.abs().sum()):.3e}")
-    opt.step()
-
-    bn_after = {k: v for k, v in pipe_m.classifier.state_dict().items()
-                if "running_" in k or "num_batches_tracked" in k}
-    bn_fixed = all(torch.equal(bn_before[k].cpu(), bn_after[k].cpu()) for k in bn_before)
-    clf_after = {k: v for k, v in pipe_m.classifier.state_dict().items()
-                 if "running_" not in k and "num_batches_tracked" not in k}
-    clf_moved = any(not torch.equal(clf_before[k].cpu(), clf_after[k].cpu()) for k in clf_before)
-    report("C5_bn_buffers_fixed", bn_fixed, f"{len(bn_before)} buffers unchanged after step")
-    report("C5_classifier_updates", clf_moved, "classifier parameters changed after step")
 
     print("== C6 matched augmentation streams ==")
     ds, tr_idx, va_idx = load_pool_split(PATHS["pool_100k"], CFG["train_frac"], CFG["split_seed"])
@@ -546,13 +555,26 @@ def cmd_preflight(args):
     w = max(2, args.workers)
     h3a, id3a = loader_batch_hash(3, w)
     h3b, id3b = loader_batch_hash(3, w)
-    h4a, id4a = loader_batch_hash(4, w)
     report("C6_streams_match", h3a == h3b and id3a == id3b,
            f"epoch-3 batch identical across two independent loaders, {w} workers ({h3a[:16]}…)")
-    report("C6_epoch_varies", h3a != h4a,
-           "epoch 3 and epoch 4 give different augmentations through the loader")
-    report("C6_ids_stable", id3a == id4a,
+
+    # The discriminating test: ONE loader, epoch changed on its parent dataset
+    # between iterations. Under the original persistent-worker bug the workers
+    # kept a stale copy and this would return the same batch twice.
+    sub_r = SeededSubset(ds, probe, train_tf, augment=True, seed=CFG["run_seed"])
+    dl_r = make_loader(sub_r, 16, False, CFG["run_seed"], w)
+    sub_r.set_epoch(3)
+    xb3, _, ib3 = next(iter(dl_r))
+    sub_r.set_epoch(4)
+    xb4, _, ib4 = next(iter(dl_r))
+    r3 = hashlib.sha256(xb3.numpy().tobytes()).hexdigest()
+    r4 = hashlib.sha256(xb4.numpy().tobytes()).hexdigest()
+    report("C6_loader_reuse_epoch_varies", r3 != r4,
+           f"same loader object, epoch 3 -> 4 changes the batch ({r3[:12]}… -> {r4[:12]}…)")
+    report("C6_ids_stable", ib3.tolist() == ib4.tolist(),
            "sample IDs unchanged across epochs; only augmentation differs")
+    report("C6_reuse_matches_fresh", r3 == h3a,
+           "reused loader at epoch 3 matches a freshly built one")
 
     print("== C7 content disjointness and duplicate resolution ==")
     if args.skip_hash:
@@ -631,33 +653,46 @@ def cmd_preflight(args):
         json.dump(manifest, open(outdir / "manifest.json", "w"))
         print(f"   manifest written to {outdir/'manifest.json'}  id={manifest['manifest_id'][:16]}…")
 
-    print("== C8 checkpoint round-trip for the new writer ==")
-    pc = build_arm("M", device)
-    with torch.no_grad():
-        pc.freq_mask.mask_weights.normal_(0, 0.3)   # non-trivial state to round-trip
-    xq = torch.randn(4, 3, 224, 224, device=device)
-    with torch.no_grad():
-        y1 = pc(xq)
-    tmp = outdir / "_c8_roundtrip.pt"
-    torch.save({"pipeline_state_dict": pc.state_dict()}, tmp)
-    pr = build_arm("M", device)
-    pr.load_state_dict(torch.load(tmp, map_location=device, weights_only=False)["pipeline_state_dict"])
-    pr.to(device)
-    freeze_bn_eval(pr)
-    with torch.no_grad():
-        y2 = pr(xq)
-    sd1, sd2 = pc.state_dict(), pr.state_dict()
-    tensors_equal = all(torch.equal(sd1[k].cpu(), sd2[k].cpu()) for k in sd1)
-    logits_equal = bool(torch.equal(y1, y2))
-    preds_equal = bool(torch.equal(y1.argmax(1), y2.argmax(1)))
-    tmp.unlink()
-    report("C8_state_roundtrip", tensors_equal,
-           f"{len(sd1)} tensors identical after save/reload (buffers and mask included)")
-    report("C8_prediction_roundtrip", logits_equal and preds_equal,
-           f"logits bit-identical after reload; max|Δ|={float((y1-y2).abs().max()):.3e}")
+    print("== C8 checkpoint round-trip for the new writer, both arms ==")
+    for arm_tag in ("U", "M"):
+        pc = build_arm(arm_tag, device)
+        with torch.no_grad():
+            for prm in pc.classifier.parameters():
+                prm.add_(torch.randn_like(prm) * 1e-3)   # move off the pristine state
+            if pc.freq_mask is not None:
+                pc.freq_mask.mask_weights.normal_(0, 0.3)
+        xq = torch.randn(4, 3, 224, 224, device=device)
+        with torch.no_grad():
+            y1 = pc(xq)
+        tmp = outdir / f"_c8_{arm_tag}.pt"
+        torch.save({"pipeline_state_dict": pc.state_dict()}, tmp)
+        pr = build_arm(arm_tag, device)
+        pr.load_state_dict(torch.load(tmp, map_location=device,
+                                      weights_only=False)["pipeline_state_dict"])
+        pr.to(device)
+        freeze_bn_eval(pr)
+        with torch.no_grad():
+            y2 = pr(xq)
+        sd1, sd2 = pc.state_dict(), pr.state_dict()
+        tmp.unlink()
+        report(f"C8_{arm_tag}_state_roundtrip",
+               all(torch.equal(sd1[k].cpu(), sd2[k].cpu()) for k in sd1),
+               f"{len(sd1)} tensors identical after save/reload (buffers and mask included)")
+        report(f"C8_{arm_tag}_prediction_roundtrip",
+               bool(torch.equal(y1, y2)),
+               f"logits bit-identical after reload; max|Δ|={float((y1-y2).abs().max()):.3e}")
 
-    ok = all(v["pass_"] for v in results.values())
-    json.dump(results, open(outdir / "preflight.json", "w"), indent=2, default=str)
+    missing = [k for k in REQUIRED_CHECKS if k not in results]
+    if missing:
+        print(f"  [FAIL] coverage: required checks not run: {missing}")
+    ok = all(v["pass_"] for v in results.values() if v.get("gating", True)) and not missing
+    payload = dict(checks=results, required=list(REQUIRED_CHECKS), missing=missing,
+                   all_passed=ok, torch=torch.__version__,
+                   time=time.strftime("%Y-%m-%dT%H:%M:%S"))
+    mp = manifest_path()
+    if mp.exists():
+        payload["manifest_id"] = json.load(open(mp))["manifest_id"]
+    json.dump(payload, open(outdir / "preflight.json", "w"), indent=2, default=str)
     print(f"\n{'ALL CHECKS PASSED' if ok else 'ONE OR MORE CHECKS FAILED'} "
           f"-> {outdir/'preflight.json'}")
     return 0 if ok else 1
@@ -948,17 +983,26 @@ def cmd_train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     arm = args.arm
     outdir = PATHS["out"] / f"arm_{arm}"
-    if (outdir / "final.pt").exists() and not args.restart:
+    existing = [f.name for f in (outdir.glob("*") if outdir.exists() else [])
+                if f.name in ("final.pt", "initial.pt", "history.json", "best_dev.pt",
+                              "FAILURE.json", "config.json")]
+    if existing and not args.restart:
         raise SystemExit(
-            f"{outdir} already holds a completed run. Counted runs are not overwritten. "
-            "Pass --restart only for a documented, intentional restart.")
+            f"{outdir} already holds run evidence {existing} — possibly a completed, "
+            "interrupted or failed run. Counted runs are never overwritten. Pass "
+            "--restart only for a documented, intentional restart.")
     pf = PATHS["out"] / "preflight" / "preflight.json"
     if not pf.exists():
         raise SystemExit(f"No preflight record at {pf}. Run `preflight` first.")
-    checks = json.load(open(pf))
-    failed = [k for k, v in checks.items() if v.get("gating", True) and not v.get("pass_")]
-    if failed:
-        raise SystemExit(f"Preflight has failing gating checks: {failed}. Not launching.")
+    pfj = json.load(open(pf))
+    if "checks" not in pfj:
+        raise SystemExit(f"{pf} predates the coverage gate. Re-run `preflight`.")
+    miss = [k for k in REQUIRED_CHECKS if k not in pfj["checks"]]
+    failed = [k for k, v in pfj["checks"].items()
+              if v.get("gating", True) and not v.get("pass_")]
+    if miss or failed:
+        raise SystemExit(f"Preflight incomplete or failing. missing={miss} failed={failed}. "
+                         "Not launching.")
     outdir.mkdir(parents=True, exist_ok=True)
     CFG["amp"] = args.amp
     CFG["epochs"] = args.epochs
@@ -971,7 +1015,14 @@ def cmd_train(args):
     CFG["n_train"], CFG["n_dev"] = len(tr_idx), len(va_idx)
     CFG["manifest_fingerprint_100k"] = man["fingerprint_100k"]
     CFG["manifest_fingerprint_25k"] = man["fingerprint_25k"]
-    CFG["raw_overlap_before_resolution"] = man["raw_overlap"]
+    if pfj.get("manifest_id") != man["manifest_id"]:
+        raise SystemExit(
+            f"Preflight was recorded against manifest {pfj.get('manifest_id')}, but the "
+            f"current manifest is {man['manifest_id']}. Re-run `preflight`.")
+    CFG["manifest_id"] = man["manifest_id"]
+    CFG["preflight_time"] = pfj.get("time")
+    CFG["raw_overlap_decoded"] = man["raw_overlap_decoded"]
+    CFG["raw_overlap_encoded"] = man["raw_overlap_encoded"]
     json.dump(CFG, open(outdir / "config.json", "w"), indent=2)
     train_tf, eval_tf = build_transforms()
     tr = SeededSubset(ds, tr_idx, train_tf, augment=True, seed=CFG["run_seed"])
@@ -1008,6 +1059,8 @@ def cmd_train(args):
             torch.save({"pipeline_state_dict": pipe.state_dict(), "epoch": ep,
                         "dev_top1": dev_stats["top1"], "config": CFG},
                        outdir / "best_dev.pt")
+    CFG["skipped_updates_total"] = sum(h.get("skipped_updates", 0) for h in history)
+    json.dump(CFG, open(outdir / "config.json", "w"), indent=2)
     torch.save({"pipeline_state_dict": pipe.state_dict(), "epoch": args.epochs,
                 "dev_top1": history[-1]["dev_top1"], "config": CFG}, outdir / "final.pt")
     print(f"[{arm}] done. final epoch {args.epochs}; best dev {best[0]:.2f}% at epoch {best[1]}")
@@ -1026,13 +1079,36 @@ def cmd_eval_pair(args):
     outdir = PATHS["out"] / "pair_eval"
     outdir.mkdir(parents=True, exist_ok=True)
 
-    store, results = {}, {}
+    # The two arms must be comparable before anything is compared.
+    payloads, cfgs = {}, {}
     for arm in ("U", "M"):
         ck = PATHS["out"] / f"arm_{arm}" / f"{args.endpoint}.pt"
         if not ck.exists():
             print(f"missing {ck}"); return 1
+        payloads[arm] = torch.load(ck, map_location="cpu", weights_only=False)
+        cfgs[arm] = payloads[arm].get("config", {})
+    problems = []
+    if payloads["U"].get("epoch") != payloads["M"].get("epoch"):
+        problems.append(f"epoch mismatch: U={payloads['U'].get('epoch')} "
+                        f"M={payloads['M'].get('epoch')}")
+    for key in ("manifest_id", "classifier_lr", "classifier_wd", "batch_size",
+                "split_seed", "run_seed", "grad_clip", "amp", "epochs"):
+        if cfgs["U"].get(key) != cfgs["M"].get(key):
+            problems.append(f"{key} mismatch: U={cfgs['U'].get(key)} M={cfgs['M'].get(key)}")
+    if cfgs["U"].get("manifest_id") != man["manifest_id"]:
+        problems.append("arms were trained against a different manifest than this evaluation")
+    su, sm = cfgs["U"].get("skipped_updates_total"), cfgs["M"].get("skipped_updates_total")
+    if (su or 0) != (sm or 0):
+        problems.append(f"unequal AMP-skipped updates: U={su} M={sm}")
+    if problems:
+        raise SystemExit("Arms are not comparable:\n  - " + "\n  - ".join(problems))
+    print(f"  arms comparable: epoch={payloads['U'].get('epoch')}, "
+          f"manifest={man['manifest_id'][:16]}…")
+
+    store, results = {}, {}
+    for arm in ("U", "M"):
         pipe = build_arm(arm, device)
-        pipe.load_state_dict(torch.load(ck, map_location=device, weights_only=False)["pipeline_state_dict"])
+        pipe.load_state_dict(payloads[arm]["pipeline_state_dict"])
         pipe.to(device).eval()
         stats, rows = evaluate(pipe, loader, device, use_mask=True, amp=False)
         save_rows(rows, outdir / f"{arm}_{args.endpoint}.csv")
