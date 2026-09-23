@@ -913,10 +913,10 @@ def cmd_pilot(args):
     if man:
         from datasets import load_from_disk
         ds = load_from_disk(str(PATHS["pool_100k"]))
-        tr_idx = man["train"]
+        tr_idx, dv_idx = man["train"], man["dev"]
     else:
         print("  (no manifest yet — timing only, using the raw seed-42 split)")
-        ds, tr_idx, _ = load_pool_split(PATHS["pool_100k"], CFG["train_frac"], CFG["split_seed"])
+        ds, tr_idx, dv_idx = load_pool_split(PATHS["pool_100k"], CFG["train_frac"], CFG["split_seed"])
     train_tf, _ = build_transforms()
     sub = SeededSubset(ds, tr_idx, train_tf, augment=True, seed=CFG["run_seed"])
     sub.set_epoch(0)
@@ -970,10 +970,44 @@ def cmd_pilot(args):
     }
     for budget_h in (2, 4, 8):
         est[f"epochs_in_{budget_h}h_one_arm"] = int(budget_h * 3600 / epoch_s)
-    print(json.dumps(est, indent=2))
+
+    # Per-epoch cost is not training alone: every epoch also evaluates the development
+    # split and writes checkpoints. Measured here, not assumed negligible.
+    _, eval_tf = build_transforms()
+    dv = SeededSubset(ds, dv_idx, eval_tf, augment=False, seed=CFG["run_seed"])
+    dv_loader = make_loader(dv, CFG["batch_size"], False, CFG["run_seed"], args.workers)
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    t_dev = time.time()
+    evaluate(pipe, dv_loader, device, use_mask=True, amp=args.amp)
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    dev_s = time.time() - t_dev
+
     PATHS["out"].mkdir(parents=True, exist_ok=True)
-    json.dump(est, open(PATHS["out"] / "pilot.json", "w"), indent=2)
-    print(f"written -> {PATHS['out']/'pilot.json'}")
+    tmp_ckpt = PATHS["out"] / f"_pilot_ckpt_{args.tag or 'x'}.pt"
+    t_ck = time.time()
+    torch.save({"pipeline_state_dict": pipe.state_dict()}, tmp_ckpt)
+    ckpt_s = time.time() - t_ck
+    tmp_ckpt.unlink(missing_ok=True)
+
+    per_epoch_s = epoch_s + dev_s + 2 * ckpt_s      # final.pt and best_dev.pt
+    est.update({
+        "dev_images": len(dv_idx),
+        "dev_eval_seconds": dev_s,
+        "checkpoint_write_seconds": ckpt_s,
+        "seconds_per_epoch_total": per_epoch_s,
+        "minutes_per_epoch_total": per_epoch_s / 60.0,
+        "declared_epochs": args.epochs,
+        "estimated_run_minutes_one_arm": args.epochs * per_epoch_s / 60.0,
+    })
+    print(json.dumps(est, indent=2))
+    name = f"pilot_{args.tag}.json" if args.tag else "pilot.json"
+    json.dump(est, open(PATHS["out"] / name, "w"), indent=2)
+    print(f"written -> {PATHS['out']/name}")
+    print(f"\n{args.epochs} epochs at {per_epoch_s:.1f}s/epoch (train {epoch_s:.1f} + "
+          f"dev {dev_s:.1f} + checkpoints {2*ckpt_s:.1f}) "
+          f"= {args.epochs*per_epoch_s/60.0:.1f} min per arm.")
     print("\nPilot weights are discarded; nothing was saved. Reset before the counted pair.")
     return 0
 
@@ -1159,6 +1193,11 @@ def main():
     p = sub.add_parser("pilot")
     p.add_argument("--steps", type=int, default=60)
     p.add_argument("--amp", action="store_true")
+    p.add_argument("--tag", default=None,
+                   help="suffix for the output file, so concurrent pilots do not overwrite "
+                        "each other: pilot_<tag>.json")
+    p.add_argument("--epochs", type=int, default=15,
+                   help="budget to cost out in the total-runtime estimate")
     p.add_argument("--workers", type=int, default=8); p.set_defaults(fn=cmd_pilot)
 
     p = sub.add_parser("train")
