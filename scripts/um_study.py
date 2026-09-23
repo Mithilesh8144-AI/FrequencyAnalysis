@@ -1012,6 +1012,98 @@ def cmd_pilot(args):
     return 0
 
 
+def radial_profile(m, rmax=111):
+    """Signed annular means on the fftshifted grid, floored integer radius bins.
+
+    Matches the manuscript's convention: r = 1..rmax, bins outside the complete
+    annuli (floor(r) > rmax) are excluded, and the mean is of signed gains.
+    """
+    n = m.shape[-1]
+    c = n // 2
+    yy, xx = np.mgrid[0:n, 0:n]
+    r = np.floor(np.sqrt((yy - c) ** 2 + (xx - c) ** 2)).astype(int)
+    prof = np.array([m[r == k].mean() if np.any(r == k) else np.nan
+                     for k in range(1, rmax + 1)])
+    return prof, r
+
+
+def cmd_mask_report(args):
+    """Descriptive statistics for the counted pair. Saved arrays only, no training."""
+    out = {}
+    mdir = PATHS["out"] / "arm_M"
+    ck = mdir / "final.pt"
+    if not ck.exists():
+        raise SystemExit(f"No {ck}. Run the counted pair first.")
+
+    pipe = build_arm("M", torch.device("cpu"))
+    sd = torch.load(ck, map_location="cpu")["pipeline_state_dict"]
+    pipe.load_state_dict(sd, strict=True)
+    eff = pipe.freq_mask.effective().detach().cpu().numpy()[0, 0]
+
+    n = eff.shape[-1]
+    c = n // 2
+    prof, rgrid = radial_profile(eff)
+    lo = np.nanmean(prof[0:19])       # r = 1..19
+    hi = np.nanmean(prof[69:111])     # r = 70..111
+    out["final_mask"] = {
+        "mean": float(eff.mean()),
+        "std": float(eff.std()),
+        "min": float(eff.min()),
+        "max": float(eff.max()),
+        "deviation_from_identity_D": float(((eff - 1.0) ** 2).mean()),
+        "dc_gain": float(eff[c, c]),
+        "high_low_ratio": float(hi / lo),
+        "mean_low_r1_19": float(lo),
+        "mean_high_r70_111": float(hi),
+        "bins_within_0.01_of_1_pct": float(100.0 * (np.abs(eff - 1.0) < 0.01).mean()),
+        "symmetry_max_abs_diff": float(np.abs(eff - eff[(n - np.arange(n)) % n][:, (n - np.arange(n)) % n]).max()),
+    }
+    np.save(PATHS["out"] / "M_final_effective_mask.npy", eff)
+    np.save(PATHS["out"] / "M_final_radial_profile.npy", prof)
+
+    # trajectory across the saved per-epoch masks
+    traj = []
+    for f in sorted(mdir.glob("mask_epoch_*.npy")):
+        e = np.load(f)
+        e = e[0, 0] if e.ndim == 4 else e
+        p_, _ = radial_profile(e)
+        traj.append({
+            "epoch": int(f.stem.split("_")[-1]),
+            "mean": float(e.mean()), "std": float(e.std()),
+            "D": float(((e - 1.0) ** 2).mean()), "dc_gain": float(e[c, c]),
+            "high_low_ratio": float(np.nanmean(p_[69:111]) / np.nanmean(p_[0:19])),
+        })
+    out["mask_trajectory"] = traj
+
+    # both learning curves, and the declared endpoint
+    for arm in ("U", "M"):
+        h = PATHS["out"] / f"arm_{arm}" / "history.json"
+        if h.exists():
+            out[f"history_{arm}"] = json.load(open(h))
+    out["declared_endpoint"] = {
+        "epochs": args.epochs_declared,
+        "primary": "final.pt at the declared final epoch",
+        "secondary": "best_dev.pt",
+        "note": "budget declared before launch; endpoint not moved after results were seen",
+    }
+
+    json.dump(out, open(PATHS["out"] / "mask_report.json", "w"), indent=2)
+    print(json.dumps({k: v for k, v in out.items() if not k.startswith("history_")}, indent=2))
+    for arm in ("U", "M"):
+        h = out.get(f"history_{arm}")
+        if not h:
+            continue
+        print(f"\n== arm {arm} learning curve ==")
+        print(f"{'epoch':>5} {'train_top1':>11} {'dev_top1':>9}")
+        for row in h:
+            print(f"{row.get('epoch','?'):>5} {row.get('train_top1',float('nan')):>11.3f} "
+                  f"{row.get('dev_top1',float('nan')):>9.3f}")
+    print(f"\nwritten -> {PATHS['out']/'mask_report.json'}")
+    print(f"arrays   -> {PATHS['out']/'M_final_effective_mask.npy'}, "
+          f"{PATHS['out']/'M_final_radial_profile.npy'}")
+    return 0
+
+
 def cmd_train(args):
     """HELD: do not launch until the implementation has been reviewed."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1199,6 +1291,10 @@ def main():
     p.add_argument("--epochs", type=int, default=15,
                    help="budget to cost out in the total-runtime estimate")
     p.add_argument("--workers", type=int, default=8); p.set_defaults(fn=cmd_pilot)
+
+    p = sub.add_parser("mask-report")
+    p.add_argument("--epochs-declared", type=int, default=15)
+    p.set_defaults(fn=cmd_mask_report)
 
     p = sub.add_parser("train")
     p.add_argument("--arm", choices=["U", "M"], required=True)
