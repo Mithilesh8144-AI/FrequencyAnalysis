@@ -212,6 +212,24 @@ class SeededSubset(Dataset):
         return x, int(item["label"]), int(row)
 
 
+def manifest_path():
+    return PATHS["out"] / "preflight" / "manifest.json"
+
+
+def load_manifest(required=True):
+    p = manifest_path()
+    if not p.exists():
+        if required:
+            raise SystemExit(
+                f"No manifest at {p}. Run `preflight` (without --skip-hash) first: "
+                "the cleaned, duplicate-resolved partitions are defined there.")
+        return None
+    m = json.load(open(p))
+    print(f"  manifest: train={m['n_train']} dev={m['n_dev']} eval={m['n_eval']} "
+          f"(raw overlaps before resolution: {m['raw_overlap']})")
+    return m
+
+
 def load_pool_split(pool_path, train_frac, split_seed):
     """Reproduces the historical split exactly: random_split over range(N) at seed 42."""
     from datasets import load_from_disk
@@ -358,9 +376,10 @@ def cmd_preflight(args):
     outdir = PATHS["out"] / "preflight"
     outdir.mkdir(parents=True, exist_ok=True)
 
-    def report(tag, ok, detail):
-        results[tag] = dict(pass_=bool(ok), detail=detail)
-        print(f"  [{'PASS' if ok else 'FAIL'}] {tag}: {detail}", flush=True)
+    def report(tag, ok, detail, gate=True):
+        results[tag] = dict(pass_=bool(ok), detail=detail, gating=bool(gate))
+        mark = ("PASS" if ok else "FAIL") if gate else "INFO"
+        print(f"  [{mark}] {tag}: {detail}", flush=True)
 
     print("== C1 identity FFT/IFFT equivalence ==")
     x = torch.randn(4, 3, 224, 224, device=device)
@@ -372,12 +391,12 @@ def cmd_preflight(args):
     print("== C2 symmetric mask construction ==")
     m = SymmetricBoundedMask().to(device)
     eff0 = m.effective()
-    ident_err = float((eff0 - 1.0).abs().max())
+    ident_err = float((eff0 - 1.0).abs().max().detach())
     with torch.no_grad():
         m.mask_weights.normal_(0, 0.5)
     eff = m.effective()
     idx = m.pair_idx
-    sym_err = float((eff - eff[:, :, idx, :][:, :, :, idx]).abs().max())
+    sym_err = float((eff - eff[:, :, idx, :][:, :, :, idx]).abs().max().detach())
     report("C2_mask_symmetry", ident_err == 0.0 and sym_err < 1e-6,
            f"|m(w=0)-1|max = {ident_err:.3e}; |m(k)-m(-k)|max = {sym_err:.3e}")
 
@@ -436,30 +455,63 @@ def cmd_preflight(args):
     report("C6_streams_match", ha == hb, f"epoch-3 input hash identical across arms ({ha[:16]}…)")
     report("C6_epoch_varies", ha != hc, "epoch 3 and epoch 4 give different augmentations")
 
-    print("== C7 content-hash disjointness (this reads both caches) ==")
+    print("== C7 content-hash disjointness and duplicate resolution ==")
     if args.skip_hash:
-        report("C7_disjoint", False, "SKIPPED via --skip-hash (must be run before training)")
+        report("C7_disjoint", False, "SKIPPED via --skip-hash (required before training)")
     else:
         t0 = time.time()
         print("   hashing 100k pool…", flush=True)
         h100 = sha256_encoded_images(PATHS["pool_100k"])
         print("   hashing 25k eval set…", flush=True)
         h25 = sha256_encoded_images(PATHS["eval_25k"])
-        tr_set = {h100[i] for i in tr_idx}
-        va_set = {h100[i] for i in va_idx}
-        ev_set = set(h25)
-        ov_tr_ev, ov_va_ev = len(tr_set & ev_set), len(va_set & ev_set)
-        ov_tr_va = len(tr_set & va_set)
-        dup_100 = len(h100) - len(set(h100))
-        dup_25 = len(h25) - len(set(h25))
-        detail = (f"train∩eval={ov_tr_ev}, dev∩eval={ov_va_ev}, train∩dev={ov_tr_va}, "
-                  f"internal dups: 100k={dup_100}, 25k={dup_25} "
-                  f"[{time.time()-t0:.0f}s]")
-        report("C7_disjoint", ov_tr_ev == 0 and ov_va_ev == 0 and ov_tr_va == 0, detail)
-        json.dump(dict(train=sorted(tr_idx), dev=sorted(va_idx), n_eval=len(h25),
-                       fingerprint_100k=hashlib.sha256("".join(h100).encode()).hexdigest(),
-                       fingerprint_25k=hashlib.sha256("".join(h25).encode()).hexdigest()),
-                  open(outdir / "manifest.json", "w"))
+
+        tr_h = {h100[i] for i in tr_idx}
+        va_h = {h100[i] for i in va_idx}
+        ev_h = set(h25)
+        raw = dict(train_eval=len(tr_h & ev_h), dev_eval=len(va_h & ev_h),
+                   train_dev=len(tr_h & va_h),
+                   dups_100k=len(h100) - len(set(h100)),
+                   dups_25k=len(h25) - len(set(h25)))
+        report("C7_raw_overlap", True,
+               f"BEFORE resolution — train∩eval={raw['train_eval']}, dev∩eval={raw['dev_eval']}, "
+               f"train∩dev={raw['train_dev']}, internal dups: 100k={raw['dups_100k']}, "
+               f"25k={raw['dups_25k']}  (ILSVRC-2012 contains cross-split duplicates)",
+               gate=False)
+
+        # Resolution, per the reviewer's requirement to fix crossings before training.
+        # Training pool is left intact so it still matches the historical 80k.
+        train_clean = list(tr_idx)
+        dev_clean = [i for i in va_idx if h100[i] not in tr_h]
+        dev_h = {h100[i] for i in dev_clean}
+        banned = tr_h | dev_h
+        eval_clean, seen = [], set()
+        for i, h in enumerate(h25):
+            if h in banned or h in seen:
+                continue
+            seen.add(h)
+            eval_clean.append(i)
+
+        tr_h2 = {h100[i] for i in train_clean}
+        dv_h2 = {h100[i] for i in dev_clean}
+        ev_h2 = {h25[i] for i in eval_clean}
+        ok7 = (len(tr_h2 & ev_h2) == 0 and len(dv_h2 & ev_h2) == 0
+               and len(tr_h2 & dv_h2) == 0 and len(ev_h2) == len(eval_clean))
+        report("C7_disjoint_after_resolution", ok7,
+               f"train={len(train_clean)} dev={len(dev_clean)} eval={len(eval_clean)} "
+               f"(dropped {len(va_idx)-len(dev_clean)} dev, {len(h25)-len(eval_clean)} eval); "
+               f"all pairwise intersections now 0  [{time.time()-t0:.0f}s]")
+
+        manifest = dict(
+            created="preflight",
+            pool_100k=str(PATHS["pool_100k"]), eval_25k=str(PATHS["eval_25k"]),
+            split_seed=CFG["split_seed"], train_frac=CFG["train_frac"],
+            raw_overlap=raw,
+            train=train_clean, dev=dev_clean, eval=eval_clean,
+            n_train=len(train_clean), n_dev=len(dev_clean), n_eval=len(eval_clean),
+            fingerprint_100k=hashlib.sha256("".join(h100).encode()).hexdigest(),
+            fingerprint_25k=hashlib.sha256("".join(h25).encode()).hexdigest(),
+        )
+        json.dump(manifest, open(outdir / "manifest.json", "w"))
         print(f"   manifest written to {outdir/'manifest.json'}")
 
     ok = all(v["pass_"] for v in results.values())
@@ -543,8 +595,9 @@ def cmd_eval_historical(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     from datasets import load_from_disk
     _, eval_tf = build_transforms()
+    man = load_manifest()
     eval_ds = load_from_disk(str(PATHS["eval_25k"]))
-    common = SeededSubset(eval_ds, range(len(eval_ds)), eval_tf, augment=False)
+    common = SeededSubset(eval_ds, man["eval"], eval_tf, augment=False)
     loader = make_loader(common, CFG["batch_size"], False, CFG["run_seed"], args.workers)
     outdir = PATHS["out"] / "historical"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -645,7 +698,14 @@ def train_one_epoch(pipe, loader, opt, device, epoch, amp, log_every=50):
 def cmd_pilot(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"pilot on arm M (the slower arm), device={device}, amp={args.amp}")
-    ds, tr_idx, va_idx = load_pool_split(PATHS["pool_100k"], CFG["train_frac"], CFG["split_seed"])
+    man = load_manifest(required=False)
+    if man:
+        from datasets import load_from_disk
+        ds = load_from_disk(str(PATHS["pool_100k"]))
+        tr_idx = man["train"]
+    else:
+        print("  (no manifest yet — timing only, using the raw seed-42 split)")
+        ds, tr_idx, _ = load_pool_split(PATHS["pool_100k"], CFG["train_frac"], CFG["split_seed"])
     train_tf, _ = build_transforms()
     sub = SeededSubset(ds, tr_idx, train_tf, augment=True, seed=CFG["run_seed"])
     sub.set_epoch(0)
@@ -707,9 +767,17 @@ def cmd_train(args):
     outdir.mkdir(parents=True, exist_ok=True)
     CFG["amp"] = args.amp
     CFG["epochs"] = args.epochs
-    json.dump(CFG, open(outdir / "config.json", "w"), indent=2)
+    CFG["arm"] = arm
 
-    ds, tr_idx, va_idx = load_pool_split(PATHS["pool_100k"], CFG["train_frac"], CFG["split_seed"])
+    man = load_manifest()
+    from datasets import load_from_disk
+    ds = load_from_disk(str(PATHS["pool_100k"]))
+    tr_idx, va_idx = man["train"], man["dev"]
+    CFG["n_train"], CFG["n_dev"] = len(tr_idx), len(va_idx)
+    CFG["manifest_fingerprint_100k"] = man["fingerprint_100k"]
+    CFG["manifest_fingerprint_25k"] = man["fingerprint_25k"]
+    CFG["raw_overlap_before_resolution"] = man["raw_overlap"]
+    json.dump(CFG, open(outdir / "config.json", "w"), indent=2)
     train_tf, eval_tf = build_transforms()
     tr = SeededSubset(ds, tr_idx, train_tf, augment=True, seed=CFG["run_seed"])
     dv = SeededSubset(ds, va_idx, eval_tf, augment=False)
@@ -753,8 +821,9 @@ def cmd_eval_pair(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     from datasets import load_from_disk
     _, eval_tf = build_transforms()
+    man = load_manifest()
     eval_ds = load_from_disk(str(PATHS["eval_25k"]))
-    common = SeededSubset(eval_ds, range(len(eval_ds)), eval_tf, augment=False)
+    common = SeededSubset(eval_ds, man["eval"], eval_tf, augment=False)
     loader = make_loader(common, CFG["batch_size"], False, CFG["run_seed"], args.workers)
     outdir = PATHS["out"] / "pair_eval"
     outdir.mkdir(parents=True, exist_ok=True)
