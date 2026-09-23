@@ -616,6 +616,7 @@ def cmd_eval_historical(args):
 
     results = {}
     for tag, pipe, use_mask, note in conditions:
+        print(f"  running {tag} …", flush=True)
         t0 = time.time()
         stats, rows = evaluate(pipe, loader, device, use_mask=use_mask, amp=False)
         dt = time.time() - t0
@@ -624,7 +625,7 @@ def cmd_eval_historical(args):
         stats["note"] = note
         results[tag] = stats
         print(f"  {tag:28s} top1={stats['top1']:6.3f}% top5={stats['top5']:6.3f}% "
-              f"loss={stats['loss']:.4f} n={stats['n']} [{dt:.0f}s]")
+              f"loss={stats['loss']:.4f} n={stats['n']} [{dt:.0f}s]", flush=True)
 
     # Within-classifier mask-on vs identity, paired over images.
     pairs = {}
@@ -636,7 +637,7 @@ def cmd_eval_historical(args):
         pa = [(int(r[0]), 0, 0, int(r[3])) for r in pa]
         pb = [(int(r[0]), 0, 0, int(r[3])) for r in pb]
         pairs[f"{tag}_mask_minus_identity"] = paired_bootstrap(pa, pb, seed=CFG["run_seed"])
-        print(f"  {tag} mask - identity: {pairs[f'{tag}_mask_minus_identity']}")
+        print(f"  {tag} mask - identity: {pairs[f'{tag}_mask_minus_identity']}", flush=True)
 
     json.dump(dict(conditions=results, paired=pairs), open(outdir / "summary.json", "w"), indent=2)
     print(f"\nwritten -> {outdir/'summary.json'}")
@@ -841,7 +842,7 @@ def cmd_eval_pair(args):
         store[arm] = rows
         results[arm] = stats
         print(f"  {arm}: top1={stats['top1']:.3f}% top5={stats['top5']:.3f}% "
-              f"loss={stats['loss']:.4f} n={stats['n']}")
+              f"loss={stats['loss']:.4f} n={stats['n']}", flush=True)
         if arm == "M":
             s_id, r_id = evaluate(pipe, loader, device, use_mask=False, amp=False)
             save_rows(r_id, outdir / f"M_identity_{args.endpoint}.csv")
